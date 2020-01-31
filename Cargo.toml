@@ -1,0 +1,26 @@
+[package]
+name = "bno080"
+version = "0.1.0"
+authors = ["Todd Stellanova <tstellanova@users.noreply.github.com>"]
+edition = "2018"
+description = "BNO080 driver"
+
+categories = [
+    "embedded",
+    "hardware-support",
+    "no-std",
+]
+keywords = [
+    "embedded-hal-driver",
+    "bno080",
+]
+license-file = "LICENSE"
+readme = "README.md"
+
+[dependencies]
+
+[dependencies.embedded-hal]
+version = "0.2.2"
+features = ["unproven"]
+
+
