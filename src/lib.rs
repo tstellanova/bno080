@@ -8,6 +8,7 @@ LICENSE: See LICENSE file
 use embedded_hal::{
     blocking::i2c::{Read, Write, WriteRead},
 };
+use core::ops::Shl;
 
 /// the i2c address normally used by BNO080
 pub const DEFAULT_ADDRESS: u8 =  0x4B;
@@ -87,23 +88,23 @@ impl<I, E> BNO080<I>
     }
 
     /// Send a standard packet header followed by the body data provided
-    fn send_packet(&mut self, channel: usize, body_data: &[u8]) -> Result<(), Error<E>> {
-        let packet_length = body_data.len() + PACKET_HEADER_LENGTH;
-        let packet_header = [
-            (packet_length & 0xFF) as u8, //LSB
-            (packet_length >> 8) as u8, //MSB
-            channel as u8,
-            self.sequence_numbers[channel]
-        ];
-
-        let body_len = body_data.len();
-        self.send_buf[..PACKET_HEADER_LENGTH].copy_from_slice(packet_header.as_ref());
-        self.send_buf[PACKET_HEADER_LENGTH..PACKET_HEADER_LENGTH+body_len].copy_from_slice(body_data);
-        self.sequence_numbers[channel] += 1;
-
-        self.port.write(self.address, self.send_buf.as_ref()).map_err(Error::I2c)
-
-    }
+//    fn send_packet(&mut self, channel: usize, body_data: &[u8]) -> Result<(), Error<E>> {
+//        let packet_length = body_data.len() + PACKET_HEADER_LENGTH;
+//        let packet_header = [
+//            (packet_length & 0xFF) as u8, //LSB
+//            (packet_length >> 8) as u8, //MSB
+//            channel as u8,
+//            self.sequence_numbers[channel]
+//        ];
+//
+//        let body_len = body_data.len();
+//        self.send_buf[..PACKET_HEADER_LENGTH].copy_from_slice(packet_header.as_ref());
+//        self.send_buf[PACKET_HEADER_LENGTH..PACKET_HEADER_LENGTH+body_len].copy_from_slice(body_data);
+//        self.sequence_numbers[channel] += 1;
+//
+//        self.port.write(self.address, self.send_buf.as_ref()).map_err(Error::I2c)
+//
+//    }
 
     /// Read one packet into the receive buffer
     fn receive_packet(&mut self) -> Result<(), Error<E>> {
@@ -133,12 +134,13 @@ impl<I, E> BNO080<I>
         self.recv_buf[1] = 0;
         self.port.read(self.address, &mut self.recv_buf[..PACKET_HEADER_LENGTH]).map_err(Error::I2c)?;
 
-        let packet_len_lsb = self.recv_buf[0];
-        let packet_len_msb =  self.recv_buf[1];
+        let packet_len_lsb: u16 = self.recv_buf[0] as u16;
+        let packet_len_msb: u16 =  self.recv_buf[1] as u16;
         //let _chan_num =  header_data[2];
         //let _seq_num =  header_data[3];
 
-        let mut packet_len:usize = (packet_len_msb << 8 | packet_len_lsb) as usize;
+
+        let mut packet_len:usize = (packet_len_msb.shl(8) | packet_len_lsb) as usize;
         packet_len = packet_len & (!32768); //clear continuation bit (MS)
 
         Ok(packet_len)
@@ -159,7 +161,7 @@ impl<I, E> BNO080<I>
 //        buffer[1] = 0;
 //        self.port.read(self.address, buffer).map_err(Error::I2c)
 //    }
-    
+
 //    fn read_register(&mut self, reg: u8) -> Result<u8, E> {
 //        let mut byte: [u8; 1] = [0; 1];
 //
@@ -185,12 +187,12 @@ impl<I, E> BNO080<I>
         recvo[1] = 0;
         self.port.write_read(self.address, sendo, recvo).map_err(Error::I2c)?;
 
-        let packet_len_lsb = self.recv_buf[0];
-        let packet_len_msb =  self.recv_buf[1];
+        let packet_len_lsb: u16 = self.recv_buf[0] as u16;
+        let packet_len_msb: u16 =  self.recv_buf[1] as u16;
         //let _chan_num =  header_data[2];
         //let _seq_num =  header_data[3];
 
-        let mut packet_len:usize = (packet_len_msb << 8 | packet_len_lsb) as usize;
+        let mut packet_len:usize = (packet_len_msb.shl(8) | packet_len_lsb) as usize;
         packet_len = packet_len & (!32768); //clear continuation bit (MS)
 
         Ok(packet_len)
@@ -203,12 +205,12 @@ impl<I, E> BNO080<I>
 const PACKET_HEADER_LENGTH: usize = 4;
 
 /// communication channels provided by BNO080
-const  CHANNEL_COMMAND: usize = 0;
+//const  CHANNEL_COMMAND: usize = 0;
 const  CHANNEL_EXECUTABLE: usize = 1;
-const  CHANNEL_CONTROL: usize = 2;
-const  CHANNEL_REPORTS: usize = 3;
-const  CHANNEL_WAKE_REPORTS: usize = 4;
-const  CHANNEL_GYRO: usize = 5;
+//const  CHANNEL_CONTROL: usize = 2;
+//const  CHANNEL_REPORTS: usize = 3;
+//const  CHANNEL_WAKE_REPORTS: usize = 4;
+//const  CHANNEL_GYRO: usize = 5;
 
 
 #[cfg(test)]
@@ -227,9 +229,9 @@ mod tests {
             }
         }
 
-        pub fn set_available_packet(&mut self) {
-
-        }
+//        pub fn set_available_packet(&mut self) {
+//
+//        }
     }
 
     impl Read for FakeI2cPort {
