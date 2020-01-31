@@ -76,24 +76,12 @@ impl<I, E> BNO080<I>
 
         let body_len = body_data.len();
         self.send_buf[..PACKET_HEADER_LENGTH].copy_from_slice(packet_header.as_ref());
-        self.send_buf[PACKET_HEADER_LENGTH..PACKET_HEADER_LENGTH+body_len].copy_from_slice(body_data);
+        self.send_buf[PACKET_HEADER_LENGTH..PACKET_HEADER_LENGTH + body_len].copy_from_slice(body_data);
         self.sequence_numbers[channel] += 1;
 
-        self.write_read_buffer(0, body_len+PACKET_HEADER_LENGTH,
+        let response_packet_len = self.write_read_buffer(0, body_len+PACKET_HEADER_LENGTH,
             0, PACKET_HEADER_LENGTH)?;
-        //receive packet in response
-        let packet_len_lsb = self.recv_buf[0];
-        let packet_len_msb = self.recv_buf[1];
-        //let _chan_num =  self.recv_buf[2]; //TODO do we need the response channel?
-        //let _seq_num =  self.recv_buf[3];
-
-        let mut packet_length:usize = (packet_len_msb << 8 | packet_len_lsb) as usize;
-        if packet_length >= PACKET_HEADER_LENGTH {
-            //continuation bit, MS, is 1<<15 = 32768
-            packet_length = packet_length & (!32768); //clear continuation bit (MS)
-            packet_length -= PACKET_HEADER_LENGTH; //remove header length
-            self.read_bytes(&mut self.recv_buf[PACKET_HEADER_LENGTH..packet_length])?;
-        }
+        self.read_packet_continuation( response_packet_len)?;
 
         Ok(())
     }
@@ -113,18 +101,14 @@ impl<I, E> BNO080<I>
         self.send_buf[PACKET_HEADER_LENGTH..PACKET_HEADER_LENGTH+body_len].copy_from_slice(body_data);
         self.sequence_numbers[channel] += 1;
 
-        self.write_bytes(self.send_buf.as_ref())
+        self.port.write(self.address, self.send_buf.as_ref()).map_err(Error::I2c)
+
     }
 
     /// Read one packet into the receive buffer
     fn receive_packet(&mut self) -> Result<(), Error<E>> {
         let packet_len:usize = self.read_packet_header()?;
-
-        if packet_len >= PACKET_HEADER_LENGTH {
-            let body_len = packet_len - PACKET_HEADER_LENGTH; //remove header length
-            self.read_packet_continuation(body_len)?;
-            //TODO bundle up the body somehow?
-        }
+        self.read_packet_continuation(packet_len)?;
 
        Ok(())
     }
@@ -142,6 +126,8 @@ impl<I, E> BNO080<I>
     }
 
 
+    // Read just the first header bytes of a packet
+    // Return the total size of the packet.
     fn read_packet_header(&mut self) -> Result<usize, Error<E>> {
         self.recv_buf[0] = 0;
         self.recv_buf[1] = 0;
@@ -158,10 +144,13 @@ impl<I, E> BNO080<I>
         Ok(packet_len)
     }
 
-    fn read_packet_continuation(&mut self, body_len: usize) -> Result<(), Error<E>> {
-        let total_len = body_len + PACKET_HEADER_LENGTH;
-        //self.read_bytes(&mut self.recv_buf[PACKET_HEADER_LENGTH..packet_length])?;
-        self.port.read(self.address, &mut self.recv_buf[PACKET_HEADER_LENGTH..total_len]).map_err(Error::I2c)
+    /// Read the remainder of the packet after the packet header, if any
+    fn read_packet_continuation(&mut self, total_packet_len: usize) -> Result<(), Error<E>> {
+        if total_packet_len > PACKET_HEADER_LENGTH {
+            self.port.read(self.address, &mut self.recv_buf[PACKET_HEADER_LENGTH..total_packet_len]).map_err(Error::I2c)?;
+        }
+
+        Ok(())
     }
 
     fn read_bytes(&mut self,  buffer: &mut [u8]) -> Result<(), Error<E>> {
@@ -189,16 +178,22 @@ impl<I, E> BNO080<I>
         self.port.write_read(self.address, bytes, buffer).map_err(Error::I2c)
     }
 
-    fn write_read_buffer(&mut self, write_start: usize, write_stop: usize, read_start: usize, read_stop: usize) -> Result<(), Error<E>>  {
+    fn write_read_buffer(&mut self, write_start: usize, write_stop: usize, read_start: usize, read_stop: usize) -> Result<usize, Error<E>>  {
         let sendo = &mut self.send_buf[write_start..write_stop];
         let recvo = &mut self.recv_buf[read_start..read_stop];
         recvo[0] = 0;
         recvo[1] = 0;
-        self.port.write_read(self.address, sendo, recvo).map_err(Error::I2c)
-    }
+        self.port.write_read(self.address, sendo, recvo).map_err(Error::I2c)?;
 
-    fn write_bytes(&mut self, bytes: &[u8]) -> Result<(), Error<E>> {
-        self.port.write(self.address, bytes).map_err(Error::I2c)
+        let packet_len_lsb = self.recv_buf[0];
+        let packet_len_msb =  self.recv_buf[1];
+        //let _chan_num =  header_data[2];
+        //let _seq_num =  header_data[3];
+
+        let mut packet_len:usize = (packet_len_msb << 8 | packet_len_lsb) as usize;
+        packet_len = packet_len & (!32768); //clear continuation bit (MS)
+
+        Ok(packet_len)
     }
 
 }
