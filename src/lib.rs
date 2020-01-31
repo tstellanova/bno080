@@ -113,6 +113,7 @@ impl<I, E> BNO080<I>
        Ok(())
     }
 
+    /// Send a soft reset command to the sensor
     pub fn soft_reset(&mut self) -> Result<(), Error<E>> {
         let data:[u8; 1] = [1]; //reset execute
 
@@ -125,9 +126,8 @@ impl<I, E> BNO080<I>
         Ok(())
     }
 
-
-    // Read just the first header bytes of a packet
-    // Return the total size of the packet.
+    /// Read just the first header bytes of a packet
+    /// Return the total size of the packet.
     fn read_packet_header(&mut self) -> Result<usize, Error<E>> {
         self.recv_buf[0] = 0;
         self.recv_buf[1] = 0;
@@ -153,14 +153,13 @@ impl<I, E> BNO080<I>
         Ok(())
     }
 
-    fn read_bytes(&mut self,  buffer: &mut [u8]) -> Result<(), Error<E>> {
-        //Clear the "packet length" header for responses
-        buffer[0] = 0;
-        buffer[1] = 0;
-        self.port.read(self.address, buffer).map_err(Error::I2c)
-    }
-
-
+//    fn read_bytes(&mut self,  buffer: &mut [u8]) -> Result<(), Error<E>> {
+//        //Clear the "packet length" header for responses
+//        buffer[0] = 0;
+//        buffer[1] = 0;
+//        self.port.read(self.address, buffer).map_err(Error::I2c)
+//    }
+    
 //    fn read_register(&mut self, reg: u8) -> Result<u8, E> {
 //        let mut byte: [u8; 1] = [0; 1];
 //
@@ -170,14 +169,15 @@ impl<I, E> BNO080<I>
 //        }
 //    }
 
-    /// Write bytes to and read bytes from target in a single transaction
-    fn write_read_bytes(&mut self,  bytes: &[u8], buffer: &mut [u8]) -> Result<(), Error<E>> {
-        //Clear the "packet length" header for responses
-        buffer[0] = 0;
-        buffer[1] = 0;
-        self.port.write_read(self.address, bytes, buffer).map_err(Error::I2c)
-    }
+//    /// Write bytes to and read bytes from target in a single transaction
+//    fn write_read_bytes(&mut self,  bytes: &[u8], buffer: &mut [u8]) -> Result<(), Error<E>> {
+//        //Clear the "packet length" header for responses
+//        buffer[0] = 0;
+//        buffer[1] = 0;
+//        self.port.write_read(self.address, bytes, buffer).map_err(Error::I2c)
+//    }
 
+    /// Write from the send buffer and receive into the receive buffer in a single transaction
     fn write_read_buffer(&mut self, write_start: usize, write_stop: usize, read_start: usize, read_stop: usize) -> Result<usize, Error<E>>  {
         let sendo = &mut self.send_buf[write_start..write_stop];
         let recvo = &mut self.recv_buf[read_start..read_stop];
