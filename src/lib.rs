@@ -118,20 +118,12 @@ impl<I, E> BNO080<I>
 
     /// Read one packet into the receive buffer
     fn receive_packet(&mut self) -> Result<(), Error<E>> {
-        //read packet header
-        self.read_bytes(&mut self.recv_buf[..PACKET_HEADER_LENGTH])?;
-        //got a packet header
-        let packet_len_lsb = self.recv_buf[0];
-        let packet_len_msb =  self.recv_buf[1];
-        //let _chan_num =  header_data[2];
-        //let _seq_num =  header_data[3];
+        let packet_len:usize = self.read_packet_header()?;
 
-        let mut packet_length:usize = (packet_len_msb << 8 | packet_len_lsb) as usize;
-        if packet_length >= PACKET_HEADER_LENGTH {
-            //continuation bit, MS, is 1<<15 = 32768
-            packet_length = packet_length & (!32768); //clear continuation bit (MS)
-            packet_length -= PACKET_HEADER_LENGTH; //remove header length
-            self.read_bytes(&mut self.recv_buf[PACKET_HEADER_LENGTH..packet_length])?;
+        if packet_len >= PACKET_HEADER_LENGTH {
+            let body_len = packet_len - PACKET_HEADER_LENGTH; //remove header length
+            self.read_packet_continuation(body_len)?;
+            //TODO bundle up the body somehow?
         }
 
        Ok(())
@@ -147,6 +139,29 @@ impl<I, E> BNO080<I>
         let _res = self.receive_packet();
 
         Ok(())
+    }
+
+
+    fn read_packet_header(&mut self) -> Result<usize, Error<E>> {
+        self.recv_buf[0] = 0;
+        self.recv_buf[1] = 0;
+        self.port.read(self.address, &mut self.recv_buf[..PACKET_HEADER_LENGTH]).map_err(Error::I2c)?;
+
+        let packet_len_lsb = self.recv_buf[0];
+        let packet_len_msb =  self.recv_buf[1];
+        //let _chan_num =  header_data[2];
+        //let _seq_num =  header_data[3];
+
+        let mut packet_len:usize = (packet_len_msb << 8 | packet_len_lsb) as usize;
+        packet_len = packet_len & (!32768); //clear continuation bit (MS)
+
+        Ok(packet_len)
+    }
+
+    fn read_packet_continuation(&mut self, body_len: usize) -> Result<(), Error<E>> {
+        let total_len = body_len + PACKET_HEADER_LENGTH;
+        //self.read_bytes(&mut self.recv_buf[PACKET_HEADER_LENGTH..packet_length])?;
+        self.port.read(self.address, &mut self.recv_buf[PACKET_HEADER_LENGTH..total_len]).map_err(Error::I2c)
     }
 
     fn read_bytes(&mut self,  buffer: &mut [u8]) -> Result<(), Error<E>> {
