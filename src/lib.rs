@@ -19,7 +19,11 @@ pub const DEFAULT_ADDRESS: u8 =  0x4A;
 pub const ALTERNATE_ADDRESS: u8 =  0x4B;
 
 const SEND_BUF_LEN: usize = 256;
-const RECV_BUF_LEN: usize = 1024;
+const SEG_RECV_BUF_LEN: usize = 256;
+const MSG_BUF_LEN: usize = 1024;
+
+/// the maximum number of bytes we can read from the device at one time
+const MAX_TRANSFER_READ: usize = 255;///TODO device max transfer seems to be this, verify dynamically
 
 /// All possible errors in this crate
 #[derive(Debug)]
@@ -35,7 +39,9 @@ pub struct BNO080<I>  {
     // each communication channel with the device has its own sequence number
     sequence_numbers: [u8; 6],
     send_buf: [u8; SEND_BUF_LEN],
-    recv_buf: [u8; RECV_BUF_LEN],
+    seg_recv_buf: [u8; SEG_RECV_BUF_LEN],
+    msg_buf: [u8; MSG_BUF_LEN],
+
     address: u8,
     port:  I,
 
@@ -52,7 +58,8 @@ impl<I, E> BNO080<I>
         BNO080 {
             sequence_numbers: [0; 6],
             send_buf: [0; SEND_BUF_LEN],
-            recv_buf: [0; RECV_BUF_LEN],
+            seg_recv_buf: [0; SEG_RECV_BUF_LEN],
+            msg_buf: [0; MSG_BUF_LEN],
             address: DEFAULT_ADDRESS,
             port: port,
         }
@@ -64,24 +71,28 @@ impl<I, E> BNO080<I>
     }
 
 
+    fn eat_all_messages(&mut self) {
+        loop {
+            let res = self.receive_packet();
+            let received_len = res.unwrap_or(0);
+            if received_len == 0 {
+                break;
+            }
+        }
+    }
 
     fn receive_advertisement(&mut self) -> Result<(), Error<E>> {
 
-        let mut res = self.receive_packet();
-        for i in 0..10 {
-            if res.is_ok() {
-                res = self.receive_packet();
-            }
-            else {
+        //let mut received_len = self.receive_packet()?;
+
+        loop {
+            let received_len = self.receive_packet()?;
+            if received_len == 0 {
                 break;
             }
         }
 
-
-        if res.is_err() {
-            hprintln!("final recv err").unwrap();
-        }
-
+        hprintln!("recv adv done ").unwrap();
         Ok(())
         //TODO look at contents of advertisement?
     }
@@ -91,29 +102,41 @@ impl<I, E> BNO080<I>
         //Section 5.1.1.1 :
         // On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
-        self.receive_advertisement()?;
+        self.eat_all_messages();
 
-        self.soft_reset(delay)?;
+//        let res = self.soft_reset(delay);
+//        if res.is_err() {
+//            //try again
+//            delay.delay_ms(10);
+//            self.soft_reset(delay)?;
+//        }
 
 
-//        // check for a valid product ID response from sensor
-//        let cmd_body: [u8; 2] = [
-//            SHTP_SENSORHUB_PROD_ID_REQ, //request product ID
-//            0, //reserved
-//            ];
-//
-//        self.send_and_receive_packet(CHANNEL_CONTROL,&cmd_body)?;
+        // check for a valid product ID response from sensor
+        let cmd_body: [u8; 2] = [
+            SHTP_SENSORHUB_PROD_ID_REQ, //request product ID
+            0, //reserved
+            ];
+
+        self.send_and_receive_packet(CHANNEL_HUB_CONTROL,&cmd_body)?;
+        //verify the response
+        let product_id = self.msg_buf[PACKET_HEADER_LENGTH + 0];
+        hprintln!("prod_id: {}", product_id).unwrap();
+        if SHTP_SENSORHUB_PROD_ID_RESP != product_id {
+            return Err(Error::InvalidChipId(product_id));
+        }
 
 //        let res = self.receive_packet();
 //        if res.is_ok() {
 //            //verify the response
-//            let product_id = self.recv_buf[PACKET_HEADER_LENGTH + 0];
+//            let product_id = self.msg_buf[PACKET_HEADER_LENGTH + 0];
+//            hprintln!("prod_id: {}", product_id).unwrap();
 //            if SHTP_SENSORHUB_PROD_ID_RESP != product_id {
 //                return Err(Error::InvalidChipId(product_id));
 //            }
 //        }
 
- //       self.enable_rotation_vector(100)?;
+        self.enable_rotation_vector(100)?;
         Ok(())
     }
 
@@ -143,13 +166,12 @@ impl<I, E> BNO080<I>
             0, // MSB sensor-specific config
         ];
 
-        self.send_packet(CHANNEL_CONTROL, &cmd_body)
+        self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)
 
     }
 
     /// Send a packet and receive the response packet
-    fn send_and_receive_packet(&mut self, channel: usize, body_data: &[u8]) -> Result<(), Error<E>> {
-        self.sequence_numbers[channel] += 1;
+    fn send_and_receive_packet(&mut self, channel: usize, body_data: &[u8]) -> Result<usize, Error<E>> {
         let packet_length = body_data.len() + PACKET_HEADER_LENGTH;
         let packet_header = [
             (packet_length & 0xFF) as u8, //LSB
@@ -157,6 +179,7 @@ impl<I, E> BNO080<I>
             channel as u8,
             self.sequence_numbers[channel]
         ];
+        self.sequence_numbers[channel] += 1;
 
         let body_len = body_data.len();
         self.send_buf[..PACKET_HEADER_LENGTH].copy_from_slice(packet_header.as_ref());
@@ -164,9 +187,9 @@ impl<I, E> BNO080<I>
 
         let response_packet_len = self.write_read_buffer(0, body_len+PACKET_HEADER_LENGTH,
             0, PACKET_HEADER_LENGTH)?;
-        self.read_packet_continuation( response_packet_len)?;
+        let received_len = self.read_sized_packet( response_packet_len)?;
 
-        Ok(())
+        Ok(received_len)
     }
 
     /// Send a standard packet header followed by the body data provided
@@ -178,22 +201,22 @@ impl<I, E> BNO080<I>
             channel as u8,
             self.sequence_numbers[channel]
         ];
+        self.sequence_numbers[channel] += 1;
 
         let body_len = body_data.len();
         self.send_buf[..PACKET_HEADER_LENGTH].copy_from_slice(packet_header.as_ref());
         self.send_buf[PACKET_HEADER_LENGTH..PACKET_HEADER_LENGTH+body_len].copy_from_slice(body_data);
-        self.sequence_numbers[channel] += 1;
 
         self.port.write(self.address, self.send_buf.as_ref()).map_err(Error::I2c)
 
     }
 
     /// Read one packet into the receive buffer
-    fn receive_packet(&mut self) -> Result<(), Error<E>> {
-        let packet_len:usize = self.read_packet_header()?;
-        self.read_packet_continuation(packet_len)?;
+    fn receive_packet(&mut self) -> Result<usize, Error<E>> {
+        let packet_len:usize = self.read_unsized_packet()?;
+        let received_len = self.read_sized_packet(packet_len)?;
 
-       Ok(())
+       Ok(received_len)
     }
 
 //    pub fn send_reinitialize_command(&mut self) -> Result<(), Error<E>> {
@@ -206,7 +229,7 @@ impl<I, E> BNO080<I>
 //            0, 0, 0, 0,
 //        ];
 //
-//        self.send_and_receive_packet(CHANNEL_CONTROL, data.as_ref())?;
+//        self.send_and_receive_packet(CHANNEL_HUB_CONTROL, data.as_ref())?;
 //
 //
 //    }
@@ -217,11 +240,16 @@ impl<I, E> BNO080<I>
         let data:[u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET]; //reset execute
 
         // send command packet and ignore received packets
-        //self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
-        self.send_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
+//        let received_len = self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
+        let _rc = self.send_packet(CHANNEL_EXECUTABLE, data.as_ref());
 
-        //give the device time to reset
         delay.delay_ms(50);
+
+        self.eat_all_messages();
+
+//        hprintln!("received_len: {}",received_len).unwrap();
+//        //give the device time to reset
+//        delay.delay_ms(50);
 
         //we may or may not receive a second garbage packet
  //       let _res = self.receive_packet(); //TODO seems to timeout
@@ -235,41 +263,87 @@ impl<I, E> BNO080<I>
     }
 
     /// Read just the first header bytes of a packet
-    /// Return the total size of the packet.
-    fn read_packet_header(&mut self) -> Result<usize, Error<E>> {
-        self.recv_buf[0] = 0;
-        self.recv_buf[1] = 0;
+    /// Return the total size of the packet that follows
+    fn read_unsized_packet(&mut self) -> Result<usize, Error<E>> {
+        self.seg_recv_buf[0] = 0;
+        self.seg_recv_buf[1] = 0;
 //        hprintln!("start header read").unwrap();
 
-        self.port.read(self.address, &mut self.recv_buf[..PACKET_HEADER_LENGTH]).map_err(Error::I2c)?;
+        self.port.read(self.address, &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH]).map_err(Error::I2c)?;
+        let packet_len = self.parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
+
 
         //Bits 14:0 are used to indicate the total number of bytes in the body plus header
-        let raw_pack_len: u16 =
-            (self.recv_buf[0] as u16) + (self.recv_buf[1] as u16).shl(8);
-
-        let mut packet_len: usize =  (raw_pack_len & (!0x8000 as u16) ) as usize;
-        let chan_num =  self.recv_buf[2];
-        let seq_num =  self.recv_buf[3];
-
-
-        hprintln!("packet_len: {} raw: {} ch {} seq {}", packet_len, raw_pack_len, chan_num, seq_num).unwrap();
-        if packet_len > 256 {
-            packet_len = 256; //TODO wtf advertising packet
-        }
+//        let raw_pack_len: u16 =
+//            (self.seg_recv_buf[0] as u16) + (self.seg_recv_buf[1] as u16).shl(8);
+//        let mut packet_len: usize =  (raw_pack_len & (!0x8000 as u16) ) as usize;
+//
+//        let chan_num =  self.seg_recv_buf[2];
+//        let seq_num =  self.seg_recv_buf[3];
+//
+//        hprintln!("packet_len: {} raw: {} ch {} seq {}", packet_len, raw_pack_len, chan_num, seq_num).unwrap();
         Ok(packet_len)
     }
 
+    fn parse_packet_header(& self, header: &[u8]) -> usize {
+        //Bits 14:0 are used to indicate the total number of bytes in the body plus header
+        //maximum packet length is ... 32767?
+        let raw_pack_len: u16 =  (header[0] as u16) + (header[1] as u16).shl(8);
+        let packet_len: usize =  (raw_pack_len & (!0x8000 as u16) ) as usize;
+
+        let chan_num =  header[2];
+        let seq_num =  header[3];
+
+        hprintln!("packet_len: {} raw: {} ch {} seq {}", packet_len, raw_pack_len, chan_num, seq_num).unwrap();
+        packet_len
+    }
+
     /// Read the remainder of the packet after the packet header, if any
-    fn read_packet_continuation(&mut self, total_packet_len: usize) -> Result<(), Error<E>> {
-        hprintln!("read continuation: {}", total_packet_len).unwrap();
-        if total_packet_len > RECV_BUF_LEN {
-            hprintln!("overflow {} > {}", total_packet_len, RECV_BUF_LEN).unwrap();
+    fn read_sized_packet(&mut self, total_packet_len: usize) -> Result<usize, Error<E>> {
+        hprintln!("sized: {}", total_packet_len).unwrap();
+        let mut remaining_len: usize = total_packet_len;
+        let mut already_read_len: usize = 0;
+
+        if total_packet_len < MAX_TRANSFER_READ {
+            if total_packet_len > 0 {
+                hprintln!("simple read: {}",total_packet_len).unwrap();
+                self.msg_buf[0] = 0;
+                self.msg_buf[1] = 0;
+                self.port.read(self.address, &mut self.msg_buf[..total_packet_len]).map_err(Error::I2c)?;
+
+                self.parse_packet_header(&self.msg_buf[..PACKET_HEADER_LENGTH]);
+                already_read_len = total_packet_len;
+            }
         }
-        if total_packet_len > PACKET_HEADER_LENGTH {
-            self.port.read(self.address, &mut self.recv_buf[PACKET_HEADER_LENGTH..total_packet_len]).map_err(Error::I2c)?;
+        else {
+            while remaining_len > 0 {
+                //TODO simplify and test this
+                let mut cur_read_len = remaining_len;
+                if cur_read_len > MAX_TRANSFER_READ { cur_read_len = MAX_TRANSFER_READ; }
+
+                self.seg_recv_buf[0] = 0;
+                self.seg_recv_buf[1] = 0;
+                hprintln!("partial {} / {}", cur_read_len, remaining_len).unwrap();
+                self.port.read(self.address, &mut self.seg_recv_buf[..cur_read_len]).map_err(Error::I2c)?;
+
+                let packet_declared_len = self.parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
+                //if we've never read any segments, transcribe the first packet header;
+                //otherwise, just transcribe the segment body (no header)
+                let transcribe_start_idx = if already_read_len > 0 { PACKET_HEADER_LENGTH } else { 0 };
+                let transcribe_len = if already_read_len > 0 { cur_read_len - PACKET_HEADER_LENGTH } else { cur_read_len };
+                //transcribe_len == cur_read_len - transcribe_start_idx
+                self.msg_buf[already_read_len..already_read_len+transcribe_len].
+                    copy_from_slice(&self.seg_recv_buf[transcribe_start_idx..cur_read_len]);
+
+                remaining_len = packet_declared_len - cur_read_len;
+                if remaining_len > 0 { remaining_len += PACKET_HEADER_LENGTH};
+                already_read_len += cur_read_len;
+                hprintln!("already {} remaining {}", already_read_len, remaining_len).unwrap();
+            }
         }
 
-        Ok(())
+
+        Ok(already_read_len)
     }
 
 //    fn read_bytes(&mut self,  buffer: &mut [u8]) -> Result<(), Error<E>> {
@@ -299,21 +373,23 @@ impl<I, E> BNO080<I>
     /// Write from the send buffer and receive into the receive buffer in a single transaction
     fn write_read_buffer(&mut self, write_start: usize, write_stop: usize, read_start: usize, read_stop: usize) -> Result<usize, Error<E>>  {
         let sendo = &mut self.send_buf[write_start..write_stop];
-        let recvo = &mut self.recv_buf[read_start..read_stop];
+        let recvo = &mut self.msg_buf[read_start..read_stop];
         recvo[0] = 0;
         recvo[1] = 0;
         hprintln!("send {} to {}, recv {} to {}", write_start, write_stop, read_start, read_stop).unwrap();
 
         self.port.write_read(self.address, sendo, recvo).map_err(Error::I2c)?;
 
-        let packet_len_lsb: u16 = self.recv_buf[0] as u16;
-        let packet_len_msb: u16 =  self.recv_buf[1] as u16;
-        let chan_num =  self.recv_buf[2];
-        let seq_num =  self.recv_buf[3];
+        let packet_len = self.parse_packet_header(&self.msg_buf[..PACKET_HEADER_LENGTH]);
 
-        let mut packet_len:usize = (packet_len_msb.shl(8) | packet_len_lsb) as usize;
-        packet_len = packet_len & (!32768); //clear continuation bit (MS)
-        hprintln!("packet_len: {} ch {} seq {}", packet_len, chan_num, seq_num).unwrap();
+//        let packet_len_lsb: u16 = self.msg_buf[0] as u16;
+//        let packet_len_msb: u16 =  self.msg_buf[1] as u16;
+//        let chan_num =  self.msg_buf[2];
+//        let seq_num =  self.msg_buf[3];
+//
+//        let mut packet_len:usize = (packet_len_msb.shl(8) | packet_len_lsb) as usize;
+//        packet_len = packet_len & (!32768); //clear continuation bit (MS)
+//        hprintln!("packet_len: {} ch {} seq {}", packet_len, chan_num, seq_num).unwrap();
 
         Ok(packet_len)
     }
@@ -324,13 +400,13 @@ impl<I, E> BNO080<I>
 /// length of packet headers
 const PACKET_HEADER_LENGTH: usize = 4;
 
-/// communication channels provided by BNO080
-const  SHTP_CHAN_COMMAND: usize = 0;
-const  CHANNEL_EXECUTABLE: usize = 1;
-const  CHANNEL_CONTROL: usize = 2;
-//const  CHANNEL_REPORTS: usize = 3;
-//const  CHANNEL_WAKE_REPORTS: usize = 4;
-//const  CHANNEL_GYRO: usize = 5;
+// The BNO080 supports six communication channels:
+const  SHTP_CHAN_COMMAND: usize = 0; /// the SHTP command channel
+const  CHANNEL_EXECUTABLE: usize = 1; /// executable channel
+const  CHANNEL_HUB_CONTROL: usize = 2; /// sensor hub control channel
+//const  CHANNEL_SENSOR_REPORTS: usize = 3; /// input sensor reports (non-wake, not gyroRV)
+//const  CHANNEL_WAKE_REPORTS: usize = 4; /// wake input sensor reports (for sensors configured as wake up sensors)
+//const  CHANNEL_GYRO_ROTATION: usize = 5; ///  gyro rotation vector (gyroRV)
 
 
 /// SHTP constants
