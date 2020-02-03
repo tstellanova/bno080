@@ -33,6 +33,8 @@ pub enum Error<E> {
 
     /// Invalid chip ID was read
     InvalidChipId(u8),
+    /// Unsupported sensor firmware version
+    InvalidFWVersion(u8)
 }
 
 pub struct BNO080<I>  {
@@ -53,7 +55,6 @@ impl<I, E> BNO080<I>
     where
         I: Read<Error = E> + Write<Error = E> + WriteRead<Error = E>,
 {
-
     pub fn new(port: I) -> Self {
         BNO080 {
             sequence_numbers: [0; 6],
@@ -70,7 +71,6 @@ impl<I, E> BNO080<I>
         self
     }
 
-
     fn eat_all_messages(&mut self) {
         loop {
             let res = self.receive_packet();
@@ -79,6 +79,69 @@ impl<I, E> BNO080<I>
                 break;
             }
         }
+    }
+
+    pub fn handle_one_message(&mut self, received_len: usize) {
+        let msg = &self.msg_buf[..received_len];
+        let chan_num =  msg[2];
+        //let _seq_num =  msg[3];
+        let report_id: u8 = msg[4];
+
+        match chan_num {
+            CHANNEL_SENSOR_REPORTS => {
+                self.handle_input_report(received_len);
+            },
+            SHTP_CHAN_COMMAND => {
+                hprintln!("command report_id: {}", report_id).unwrap();
+            },
+            CHANNEL_EXECUTABLE => {
+                match report_id {
+                    EXECUTABLE_DEVICE_RESP_RESET_COMPLETE => {
+                        hprintln!("EXECUTABLE_DEVICE_RESP_RESET_COMPLETE").unwrap();
+                    },
+                    _ => { hprintln!("executable: {}", report_id).unwrap(); }
+                }
+            },
+            CHANNEL_HUB_CONTROL => {
+                match report_id {
+                    SENSORHUB_COMMAND_RESP => {
+                        let cmd_resp = msg[6];
+                        if cmd_resp == SH2_STARTUP_INIT_UNSOLICITED {
+                            hprintln!("SH2_STARTUP_INIT_UNSOLICIT").unwrap();
+                        }
+                        else { hprintln!("SENSORHUB_COMMAND_RESP {}",cmd_resp).unwrap(); }
+                    },
+                    SENSORHUB_PROD_ID_REQ => {
+                        hprintln!("SHTP_SENSORHUB_PROD_ID_REQ").unwrap();
+                    },
+                    SENSORHUB_PROD_ID_RESP => {
+                        hprintln!("SENSORHUB_PROD_ID_RESP").unwrap();
+                    },
+                    _ =>  { hprintln!("control: {}", report_id).unwrap();}
+                }
+            },
+            _ => { hprintln!("unhandled chan_num: {}", chan_num).unwrap(); }
+        }
+
+    }
+
+    /// read and parse all available messages from sensorhub queue
+    pub fn handle_all_messages(&mut self)  {
+
+        let mut msg_count = 0;
+        loop {
+            let res = self.receive_packet();
+            let received_len = res.unwrap_or(0);
+            if received_len == 0 {
+                break;
+            }
+            else {
+                msg_count += 1;
+                self.handle_one_message(received_len);
+            }
+        }
+
+        hprintln!("handled {}", msg_count).unwrap();
     }
 
     fn receive_advertisement(&mut self) -> Result<(), Error<E>> {
@@ -107,7 +170,7 @@ impl<I, E> BNO080<I>
 //        self.send_reinitialize_command()?;
 //        self.soft_reset()?;
 //        delay.delay_ms(50);
-//        self.verify_product_id()?;
+        self.verify_product_id()?;
 
         self.enable_rotation_vector(500)?;
         Ok(())
@@ -142,13 +205,32 @@ impl<I, E> BNO080<I>
 
         //hprintln!("cmd_body: {:?}", cmd_body).unwrap();
 
-//        let resp_len = self.send_and_receive_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
-//        hprintln!("resp_len {}", resp_len).unwrap();
-
         self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
-
         Ok(())
+    }
 
+
+
+    // Sensor input reports have the form:
+    // [u8; 5]  timestamp in microseconds
+    // u8 report ID
+    // u8 sequence number of report
+    // ?? follows: about 5 * 2 bytes for eg rotation vec
+    fn handle_input_report(&mut self, received_len: usize) {
+        let msg = &self.msg_buf[..received_len];
+        let mut cursor = PACKET_HEADER_LENGTH; //skip header
+        cursor += 5; // skip timestamp
+        let feature_report_id = msg[cursor];
+        cursor += 1;
+
+        match feature_report_id {
+            SENSOR_REPORTID_ROTATION_VECTOR => {
+                hprintln!("SENSOR_REPORTID_ROTATION_VECTOR").unwrap();
+            },
+            _ => {
+                hprintln!("handle_input_report[{}]: 0x{:01x} ", received_len, feature_report_id).unwrap();
+            }
+        }
     }
 
     /// Send a packet and receive the response packet
@@ -207,25 +289,33 @@ impl<I, E> BNO080<I>
     /// check for a valid product ID response from sensor
     fn verify_product_id(&mut self) -> Result<(), Error<E>> {
         let cmd_body: [u8; 2] = [
-            SHTP_SENSORHUB_PROD_ID_REQ, //request product ID
+            SENSORHUB_PROD_ID_REQ, //request product ID
             0, //reserved
             ];
 
-        self.send_and_receive_packet(CHANNEL_HUB_CONTROL,&cmd_body)?;
+//        self.send_and_receive_packet(CHANNEL_HUB_CONTROL,&cmd_body)?;
+//        //verify the response
+//        let product_id = self.msg_buf[PACKET_HEADER_LENGTH + 0];
+//        hprintln!("prod_id: {}", product_id).unwrap();
+//        if SENSORHUB_PROD_ID_RESP != product_id {
+//            return Err(Error::InvalidChipId(product_id));
+//        }
+
+        self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
+        let _recv_len = self.receive_packet()?;
         //verify the response
-        let product_id = self.msg_buf[PACKET_HEADER_LENGTH + 0];
-        hprintln!("prod_id: {}", product_id).unwrap();
-        if SHTP_SENSORHUB_PROD_ID_RESP != product_id {
-            return Err(Error::InvalidChipId(product_id));
+
+        //hprintln!("resp: {:?}", &self.msg_buf[..recv_len]).unwrap();
+        //TODO this sometimes doesn't match because another response is incoming
+        let report_id = self.msg_buf[PACKET_HEADER_LENGTH + 0];
+        if SENSORHUB_PROD_ID_RESP != report_id {
+            return Err(Error::InvalidChipId(0));
         }
 
-        self.receive_packet()?;
-        //verify the response
-        let product_id = self.msg_buf[PACKET_HEADER_LENGTH + 0];
-        hprintln!("prod_id: {}", product_id).unwrap();
-        if SHTP_SENSORHUB_PROD_ID_RESP != product_id {
-            return Err(Error::InvalidChipId(product_id));
-        }
+        let sw_ver_major = self.msg_buf[2];
+        let sw_ver_minor = self.msg_buf[3];
+        hprintln!("FW version: {}.{} ", sw_ver_major, sw_ver_minor).unwrap();
+        //TODO detect invalid sw version
 
         Ok(())
     }
@@ -310,55 +400,24 @@ impl<I, E> BNO080<I>
         let raw_pack_len: u16 =  (packet[0] as u16) + (packet[1] as u16).shl(8);
         let packet_len: usize =  (raw_pack_len & (!0x8000 as u16) ) as usize;
 
-        let is_continuation:bool = (packet[1] & 0x80) != 0;
-        let chan_num =  packet[2];
-        let seq_num =  packet[3];
+        //let is_continuation:bool = (packet[1] & 0x80) != 0;
+        //let chan_num =  packet[2];
+        //let seq_num =  packet[3];
 
-        hprintln!("plen: {} raw: {} cont {} ch {} seq {}", packet_len, raw_pack_len, is_continuation, chan_num, seq_num).unwrap();
-
-        //TODO move this into a proper packet handler
-        if packet.len() > PACKET_HEADER_LENGTH {
-            let report_id: u8 = packet[4];
-
-            match chan_num {
-                SHTP_CHAN_COMMAND => {
-                    if report_id == 99 {
-                        hprintln!("foo").unwrap();
-                    }
-                    else { hprintln!("command report_id: {}", report_id).unwrap();}
-                }
-                CHANNEL_EXECUTABLE => {
-                    if report_id == EXECUTABLE_DEVICE_RESP_RESET_COMPLETE {
-                        hprintln!("EXECUTABLE_DEVICE_RESP_RESET_COMPLETE").unwrap();
-                    }
-                    else { hprintln!("executable: {}", report_id).unwrap(); }
-                }
-                CHANNEL_HUB_CONTROL => {
-                    if report_id == SENSORHUB_COMMAND_RESP {
-                        let cmd_resp = packet[6];
-                        if cmd_resp == SH2_STARTUP_INIT_UNSOLICIT {
-                            hprintln!("SH2_STARTUP_INIT_UNSOLICIT").unwrap();
-                        }
-                        else { hprintln!("SENSORHUB_COMMAND_RESP {}",cmd_resp).unwrap(); }
-                    }
-                    else { hprintln!("control: {}", report_id).unwrap();}
-                }
-                _ => {}
-            }
-        }
+        //hprintln!("plen: {} raw: {} cont {} ch {} seq {}", packet_len, raw_pack_len, is_continuation, chan_num, seq_num).unwrap();
 
         packet_len
     }
 
     /// Read the remainder of the packet after the packet header, if any
     fn read_sized_packet(&mut self, total_packet_len: usize) -> Result<usize, Error<E>> {
-        hprintln!("sized: {}", total_packet_len).unwrap();
+        //hprintln!("sized: {}", total_packet_len).unwrap();
         let mut remaining_len: usize = total_packet_len;
         let mut already_read_len: usize = 0;
 
         if total_packet_len < MAX_TRANSFER_READ {
             if total_packet_len > 0 {
-                hprintln!("simple read: {}",total_packet_len).unwrap();
+                //hprintln!("simple read: {}",total_packet_len).unwrap();
                 self.msg_buf[0] = 0;
                 self.msg_buf[1] = 0;
                 self.port.read(self.address, &mut self.msg_buf[..total_packet_len]).map_err(Error::I2c)?;
@@ -369,7 +428,7 @@ impl<I, E> BNO080<I>
         }
         else {
             while remaining_len > 0 {
-                //TODO simplify and test this
+                //TODO simplify and test this directly
                 let mut cur_read_len = remaining_len;
                 if cur_read_len > MAX_TRANSFER_READ { cur_read_len = MAX_TRANSFER_READ; }
 
@@ -446,14 +505,15 @@ const PACKET_HEADER_LENGTH: usize = 4;
 const  SHTP_CHAN_COMMAND: u8 = 0; /// the SHTP command channel
 const  CHANNEL_EXECUTABLE: u8 = 1; /// executable channel
 const  CHANNEL_HUB_CONTROL: u8 = 2; /// sensor hub control channel
-//const  CHANNEL_SENSOR_REPORTS: usize = 3; /// input sensor reports (non-wake, not gyroRV)
+const  CHANNEL_SENSOR_REPORTS: u8 = 3; /// input sensor reports (non-wake, not gyroRV)
 //const  CHANNEL_WAKE_REPORTS: usize = 4; /// wake input sensor reports (for sensors configured as wake up sensors)
 //const  CHANNEL_GYRO_ROTATION: usize = 5; ///  gyro rotation vector (gyroRV)
 
 
+
 /// SHTP constants
-const SHTP_SENSORHUB_PROD_ID_REQ: u8 = 0xF9;
-const SHTP_SENSORHUB_PROD_ID_RESP: u8 =  0xF8;
+const SENSORHUB_PROD_ID_REQ: u8 = 0xF9;
+const SENSORHUB_PROD_ID_RESP: u8 =  0xF8;
 
 
 const SHTP_REPORT_SET_FEATURE_COMMAND: u8 = 0xFD;
@@ -488,10 +548,9 @@ const EXECUTABLE_DEVICE_RESP_RESET_COMPLETE: u8 = 1;
 
 /// Commands and subcommands
 const SH2_INIT_UNSOLICITED: u8 = 0x80;
-const SH2_CMD_INITIALIZE: u8 =            4;
-const SH2_INIT_SYSTEM: u8 =               1;
-
-const SH2_STARTUP_INIT_UNSOLICIT:u8 = SH2_CMD_INITIALIZE | SH2_INIT_UNSOLICITED;
+const SH2_CMD_INITIALIZE: u8 = 4;
+const SH2_INIT_SYSTEM: u8 = 1;
+const SH2_STARTUP_INIT_UNSOLICITED:u8 = SH2_CMD_INITIALIZE | SH2_INIT_UNSOLICITED;
 
 
 
