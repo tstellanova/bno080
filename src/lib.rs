@@ -49,6 +49,7 @@ pub struct BNO080<I>  {
 
 }
 
+
 /// The BNO080 uses Hillcrest’s SHTP (Sensor Hub Transport Protocol)
 
 impl<I, E> BNO080<I>
@@ -92,14 +93,14 @@ impl<I, E> BNO080<I>
                 self.handle_input_report(received_len);
             },
             SHTP_CHAN_COMMAND => {
-                hprintln!("command report_id: {}", report_id).unwrap();
+                hprintln!("command report_id: 0x{:01x}", report_id).unwrap();
             },
             CHANNEL_EXECUTABLE => {
                 match report_id {
                     EXECUTABLE_DEVICE_RESP_RESET_COMPLETE => {
                         hprintln!("EXECUTABLE_DEVICE_RESP_RESET_COMPLETE").unwrap();
                     },
-                    _ => { hprintln!("executable: {}", report_id).unwrap(); }
+                    _ => { hprintln!("executable: 0x{:01x}", report_id).unwrap(); }
                 }
             },
             CHANNEL_HUB_CONTROL => {
@@ -117,7 +118,7 @@ impl<I, E> BNO080<I>
                     SENSORHUB_PROD_ID_RESP => {
                         hprintln!("SENSORHUB_PROD_ID_RESP").unwrap();
                     },
-                    _ =>  { hprintln!("control: {}", report_id).unwrap();}
+                    _ =>  { hprintln!("control: 0x{:01x}", report_id).unwrap();}
                 }
             },
             _ => { hprintln!("unhandled chan_num: {}", chan_num).unwrap(); }
@@ -141,24 +142,27 @@ impl<I, E> BNO080<I>
             }
         }
 
-        hprintln!("handled {}", msg_count).unwrap();
-    }
-
-    fn receive_advertisement(&mut self) -> Result<(), Error<E>> {
-
-        //let mut received_len = self.receive_packet()?;
-
-        loop {
-            let received_len = self.receive_packet()?;
-            if received_len == 0 {
-                break;
-            }
+        if msg_count > 1 {
+            hprintln!("handled {}", msg_count).unwrap();
         }
-
-        hprintln!("recv adv done ").unwrap();
-        Ok(())
-        //TODO look at contents of advertisement?
     }
+
+//    fn receive_advertisement(&mut self) -> Result<(), Error<E>> {
+//
+//        //let mut received_len = self.receive_packet()?;
+//
+//        loop {
+//            let received_len = self.receive_packet()?;
+//            if received_len == 0 {
+//                break;
+//            }
+//        }
+//
+//        hprintln!("recv adv done ").unwrap();
+//        Ok(())
+//        //TODO look at contents of advertisement?
+//    }
+
     /// The BNO080 starts up with all sensors disabled,
     /// waiting for the application to configure it.
     pub fn init(&mut self, delay: &mut dyn DelayMs<u8>) -> Result<(), Error<E>> {
@@ -221,11 +225,11 @@ impl<I, E> BNO080<I>
         let mut cursor = PACKET_HEADER_LENGTH; //skip header
         cursor += 5; // skip timestamp
         let feature_report_id = msg[cursor];
-        cursor += 1;
+        //cursor += 1;
 
         match feature_report_id {
             SENSOR_REPORTID_ROTATION_VECTOR => {
-                hprintln!("SENSOR_REPORTID_ROTATION_VECTOR").unwrap();
+                //hprintln!("SENSOR_REPORTID_ROTATION_VECTOR").unwrap();
             },
             _ => {
                 hprintln!("handle_input_report[{}]: 0x{:01x} ", received_len, feature_report_id).unwrap();
@@ -233,30 +237,39 @@ impl<I, E> BNO080<I>
         }
     }
 
-    /// Send a packet and receive the response packet
-    /// return the length of the response packet received
-    fn send_and_receive_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<usize, Error<E>> {
-        let packet_length = body_data.len() + PACKET_HEADER_LENGTH;
-        let packet_header = [
-            (packet_length & 0xFF) as u8, //LSB
-            (packet_length >> 8) as u8, //MSB
-            channel,
-            self.sequence_numbers[channel as usize]
-        ];
-        self.sequence_numbers[channel as usize] += 1;
-
-        let body_len = body_data.len();
-        hprintln!("send_and_receive_packet: {:?}", body_len ).unwrap();
-
-        self.send_buf[..PACKET_HEADER_LENGTH].copy_from_slice(packet_header.as_ref());
-        self.send_buf[PACKET_HEADER_LENGTH..PACKET_HEADER_LENGTH + body_len].copy_from_slice(body_data);
-
-        let response_packet_len = self.write_read_buffer(0, body_len+PACKET_HEADER_LENGTH,
-            0, PACKET_HEADER_LENGTH)?;
-        let received_len = self.read_sized_packet( response_packet_len)?;
-
-        Ok(received_len)
-    }
+//    /// Send a packet and receive the response packet
+//    /// return the length of the response packet received
+//    fn send_and_receive_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<usize, Error<E>> {
+//        let packet_length = body_data.len() + PACKET_HEADER_LENGTH;
+//        let packet_header = [
+//            (packet_length & 0xFF) as u8, //LSB
+//            packet_length.shr(8) as u8, //MSB
+//            channel,
+//            self.sequence_numbers[channel as usize]
+//        ];
+//        self.sequence_numbers[channel as usize] += 1;
+//
+//
+//        let body_len = body_data.len();
+//        let total_send_len = PACKET_HEADER_LENGTH + body_len;
+//        self.send_buf[..PACKET_HEADER_LENGTH].copy_from_slice(packet_header.as_ref());
+//        self.send_buf[PACKET_HEADER_LENGTH..total_send_len].copy_from_slice(body_data);
+//
+//        self.seg_recv_buf[0] = 0;
+//        self.seg_recv_buf[1] = 0;
+//
+//        //write the full packet and receive back the response packet header
+//        self.port.write_read(self.address,
+//                             &self.send_buf[0..total_send_len],
+//                             &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH]).
+//            map_err(Error::I2c)?;
+//        let response_packet_len = self.parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
+//
+//        //now read the full (size known) packet
+//        let received_len = self.read_sized_packet( response_packet_len)?;
+//
+//        Ok(received_len)
+//    }
 
     /// Send a standard packet header followed by the body data provided
     fn send_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<(), Error<E>> {
@@ -270,12 +283,11 @@ impl<I, E> BNO080<I>
         self.sequence_numbers[channel as usize] += 1;
 
         let body_len = body_data.len();
+        let total_send_len = PACKET_HEADER_LENGTH + body_len;
         self.send_buf[..PACKET_HEADER_LENGTH].copy_from_slice(packet_header.as_ref());
-        self.send_buf[PACKET_HEADER_LENGTH..PACKET_HEADER_LENGTH+body_len].copy_from_slice(body_data);
+        self.send_buf[PACKET_HEADER_LENGTH..total_send_len].copy_from_slice(body_data);
 
-        let total_send_len = PACKET_HEADER_LENGTH+body_len;
         self.port.write(self.address, &self.send_buf[0..total_send_len]).map_err(Error::I2c)
-
     }
 
     /// Read one packet into the receive buffer
@@ -293,92 +305,87 @@ impl<I, E> BNO080<I>
             0, //reserved
             ];
 
-//        self.send_and_receive_packet(CHANNEL_HUB_CONTROL,&cmd_body)?;
-//        //verify the response
-//        let product_id = self.msg_buf[PACKET_HEADER_LENGTH + 0];
-//        hprintln!("prod_id: {}", product_id).unwrap();
-//        if SENSORHUB_PROD_ID_RESP != product_id {
-//            return Err(Error::InvalidChipId(product_id));
-//        }
-
         self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
-        let _recv_len = self.receive_packet()?;
+        let recv_len = self.receive_packet()?;
+
         //verify the response
-
-        //hprintln!("resp: {:?}", &self.msg_buf[..recv_len]).unwrap();
-        //TODO this sometimes doesn't match because another response is incoming
-        let report_id = self.msg_buf[PACKET_HEADER_LENGTH + 0];
-        if SENSORHUB_PROD_ID_RESP != report_id {
-            return Err(Error::InvalidChipId(0));
-        }
-
-        let sw_ver_major = self.msg_buf[2];
-        let sw_ver_minor = self.msg_buf[3];
-        hprintln!("FW version: {}.{} ", sw_ver_major, sw_ver_minor).unwrap();
-        //TODO detect invalid sw version
-
-        Ok(())
-    }
-
-    fn send_reinitialize_command(&mut self) -> Result<(), Error<E>> {
-        let data:[u8; 12] = [
-            SENSORHUB_COMMAND_REQ, // report ID
-            self.sequence_numbers[CHANNEL_HUB_CONTROL as usize],
-            SH2_CMD_INITIALIZE, //command
-            SH2_INIT_SYSTEM, //p9
-            0, 0, 0, 0,
-            0, 0, 0, 0,
-        ];
-        self.sequence_numbers[CHANNEL_HUB_CONTROL as usize] += 1;
-
-        let resp_pack_len = self.send_and_receive_packet(CHANNEL_HUB_CONTROL, data.as_ref())?;
-        if resp_pack_len > 0 {
-            let report_id = data[PACKET_HEADER_LENGTH + 0];
-            let cmd = data[PACKET_HEADER_LENGTH + 1];
-            let _cmd_seq = data[PACKET_HEADER_LENGTH + 2];
-            let _resp_seq = data[PACKET_HEADER_LENGTH + 3];
-            let _resp_rc = data[PACKET_HEADER_LENGTH + 4];
-
-            if report_id != SENSORHUB_COMMAND_RESP {
-                hprintln!("bogus report id: {}", report_id).unwrap();
-                //TODO error out?
-            }
-            if cmd != SH2_CMD_INITIALIZE {
-                hprintln!("cmd: {}", cmd).unwrap();
-                //TODO error out?
+        if recv_len > PACKET_HEADER_LENGTH {
+            //hprintln!("resp: {:?}", &self.msg_buf[..recv_len]).unwrap();
+            //TODO this sometimes doesn't match because another response interjects
+            let report_id = self.msg_buf[PACKET_HEADER_LENGTH + 0];
+            if SENSORHUB_PROD_ID_RESP != report_id {
+                hprintln!("prod_id report_id: {} ??", report_id).unwrap();
+                return Err(Error::InvalidChipId(0));
             }
 
+            let sw_ver_major = self.msg_buf[2];
+            let sw_ver_minor = self.msg_buf[3];
+            hprintln!("FW version: {}.{} ", sw_ver_major, sw_ver_minor).unwrap();
+            //TODO detect invalid sw version
         }
 
         Ok(())
     }
 
-    /// Send a soft reset command to the sensor
-    pub fn soft_reset(&mut self, delay: &mut dyn DelayMs<u8>) -> Result<(), Error<E>> {
-        let data:[u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET]; //reset execute
-
-        // send command packet and ignore received packets
-//        let received_len = self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
-        let _rc = self.send_packet(CHANNEL_EXECUTABLE, data.as_ref());
-
-        delay.delay_ms(50);
-
-        self.eat_all_messages();
-
-//        hprintln!("received_len: {}",received_len).unwrap();
-//        //give the device time to reset
-//        delay.delay_ms(50);
-
-        //we may or may not receive a second garbage packet
- //       let _res = self.receive_packet(); //TODO seems to timeout
-
-//        let mut res = self.receive_packet();
-//        while res.is_ok() {
-//            res = self.receive_packet();
+//    fn send_reinitialize_command(&mut self) -> Result<(), Error<E>> {
+//        let data:[u8; 12] = [
+//            SENSORHUB_COMMAND_REQ, // report ID
+//            self.sequence_numbers[CHANNEL_HUB_CONTROL as usize],
+//            SH2_CMD_INITIALIZE, //command
+//            SH2_INIT_SYSTEM, //p9
+//            0, 0, 0, 0,
+//            0, 0, 0, 0,
+//        ];
+//        self.sequence_numbers[CHANNEL_HUB_CONTROL as usize] += 1;
+//
+//        let resp_pack_len = self.send_and_receive_packet(CHANNEL_HUB_CONTROL, data.as_ref())?;
+//        if resp_pack_len > 0 {
+//            let report_id = data[PACKET_HEADER_LENGTH + 0];
+//            let cmd = data[PACKET_HEADER_LENGTH + 1];
+//            let _cmd_seq = data[PACKET_HEADER_LENGTH + 2];
+//            let _resp_seq = data[PACKET_HEADER_LENGTH + 3];
+//            let _resp_rc = data[PACKET_HEADER_LENGTH + 4];
+//
+//            if report_id != SENSORHUB_COMMAND_RESP {
+//                hprintln!("bogus report id: {}", report_id).unwrap();
+//                //TODO error out?
+//            }
+//            if cmd != SH2_CMD_INITIALIZE {
+//                hprintln!("cmd: {}", cmd).unwrap();
+//                //TODO error out?
+//            }
+//
 //        }
+//
+//        Ok(())
+//    }
 
-        Ok(())
-    }
+//    /// Send a soft reset command to the sensor
+//    pub fn soft_reset(&mut self, delay: &mut dyn DelayMs<u8>) -> Result<(), Error<E>> {
+//        let data:[u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET]; //reset execute
+//
+//        // send command packet and ignore received packets
+////        let received_len = self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
+//        let _rc = self.send_packet(CHANNEL_EXECUTABLE, data.as_ref());
+//
+//        delay.delay_ms(50);
+//
+//        self.eat_all_messages();
+//
+////        hprintln!("received_len: {}",received_len).unwrap();
+////        //give the device time to reset
+////        delay.delay_ms(50);
+//
+//        //we may or may not receive a second garbage packet
+// //       let _res = self.receive_packet(); //TODO seems to timeout
+//
+////        let mut res = self.receive_packet();
+////        while res.is_ok() {
+////            res = self.receive_packet();
+////        }
+//
+//        Ok(())
+//    }
 
     /// Read just the first header bytes of a packet
     /// Return the total size of the packet that follows
@@ -457,43 +464,6 @@ impl<I, E> BNO080<I>
         Ok(already_read_len)
     }
 
-//    fn read_bytes(&mut self,  buffer: &mut [u8]) -> Result<(), Error<E>> {
-//        //Clear the "packet length" header for responses
-//        buffer[0] = 0;
-//        buffer[1] = 0;
-//        self.port.read(self.address, buffer).map_err(Error::I2c)
-//    }
-
-//    fn read_register(&mut self, reg: u8) -> Result<u8, E> {
-//        let mut byte: [u8; 1] = [0; 1];
-//
-//        match self.port.write_read(self.address, &[reg], &mut byte) {
-//            Ok(_) => Ok(byte[0]),
-//            Err(e) => Err(e),
-//        }
-//    }
-
-//    /// Write bytes to and read bytes from target in a single transaction
-//    fn write_read_bytes(&mut self,  bytes: &[u8], buffer: &mut [u8]) -> Result<(), Error<E>> {
-//        //Clear the "packet length" header for responses
-//        buffer[0] = 0;
-//        buffer[1] = 0;
-//        self.port.write_read(self.address, bytes, buffer).map_err(Error::I2c)
-//    }
-
-    /// Write from the send buffer and receive into the receive buffer in a single transaction
-    fn write_read_buffer(&mut self, write_start: usize, write_stop: usize, read_start: usize, read_stop: usize) -> Result<usize, Error<E>>  {
-        let sendo = &mut self.send_buf[write_start..write_stop];
-        let recvo = &mut self.msg_buf[read_start..read_stop];
-        recvo[0] = 0;
-        recvo[1] = 0;
-        hprintln!("send {} to {}, recv {} to {}", write_start, write_stop, read_start, read_stop).unwrap();
-
-        self.port.write_read(self.address, sendo, recvo).map_err(Error::I2c)?;
-        let packet_len = self.parse_packet_header(&self.msg_buf[read_start..read_stop]);
-
-        Ok(packet_len)
-    }
 
 }
 
@@ -521,15 +491,13 @@ const SHTP_REPORT_SET_FEATURE_COMMAND: u8 = 0xFD;
 const SENSOR_REPORTID_ROTATION_VECTOR: u8 = 0x05;
 
 /// requests
-const SENSORHUB_COMMAND_REQ:u8 =      0xF2;
-
-
+//const SENSORHUB_COMMAND_REQ:u8 =      0xF2;
 const SENSORHUB_COMMAND_RESP:u8 =       0xF1;
 
 
 /// executable/device channel responses
 /// Figure 1-27: SHTP executable commands and response
-const EXECUTABLE_DEVICE_CMD_RESET: u8 =  1;
+//const EXECUTABLE_DEVICE_CMD_RESET: u8 =  1;
 //const EXECUTABLE_DEVICE_CMD_ON: u8 =   2;
 //const EXECUTABLE_DEVICE_CMD_SLEEP =  3;
 
@@ -549,7 +517,7 @@ const EXECUTABLE_DEVICE_RESP_RESET_COMPLETE: u8 = 1;
 /// Commands and subcommands
 const SH2_INIT_UNSOLICITED: u8 = 0x80;
 const SH2_CMD_INITIALIZE: u8 = 4;
-const SH2_INIT_SYSTEM: u8 = 1;
+//const SH2_INIT_SYSTEM: u8 = 1;
 const SH2_STARTUP_INIT_UNSOLICITED:u8 = SH2_CMD_INITIALIZE | SH2_INIT_UNSOLICITED;
 
 
