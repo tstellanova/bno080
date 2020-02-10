@@ -38,13 +38,19 @@ pub enum Error<E> {
 }
 
 pub struct BNO080<I>  {
-    // each communication channel with the device has its own sequence number
+    /// each communication channel with the device has its own sequence number
     sequence_numbers: [u8; 6],
+    /// buffer for building and sending packet to the sensor hub
     send_buf: [u8; SEND_BUF_LEN],
+    /// buffer for receiving segments of packets from the sensor hub
     seg_recv_buf: [u8; SEG_RECV_BUF_LEN],
+    /// buffer for building packets received from the sensor hub
     msg_buf: [u8; MSG_BUF_LEN],
 
+    /// address for i2c communications with the sensor hub
     address: u8,
+
+    /// i2c port
     port:  I,
 
 }
@@ -185,7 +191,7 @@ impl<I, E> BNO080<I>
     }
 
     pub fn enable_report(&mut self, report_id: u8, millis_between_reports: u16)  -> Result<(), Error<E>> {
-        hprintln!("enable_report: {}", report_id).unwrap();
+        //hprintln!("enable_report: {}", report_id).unwrap();
         let micros_between_reports: u32 = (millis_between_reports as u32) * 1000;
         let cmd_body: [u8; 17] = [
             SHTP_REPORT_SET_FEATURE_COMMAND,
@@ -193,7 +199,7 @@ impl<I, E> BNO080<I>
             0, //feature flags
             0, //LSB change sensitivity
             0, //MSB change sensitivity
-            (micros_between_reports & 0xFF) as u8, // LSB report interval, microseconds
+            (micros_between_reports & 0xFFu32) as u8, // LSB report interval, microseconds
             (micros_between_reports.shr(8)   & 0xFFu32 ) as u8,
             (micros_between_reports.shr( 16) & 0xFFu32 ) as u8,
             (micros_between_reports.shr(24) & 0xFFu32 ) as u8, // MSB report interval
@@ -212,7 +218,6 @@ impl<I, E> BNO080<I>
         self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
         Ok(())
     }
-
 
 
     // Sensor input reports have the form:
@@ -525,28 +530,45 @@ const SH2_STARTUP_INIT_UNSOLICITED:u8 = SH2_CMD_INITIALIZE | SH2_INIT_UNSOLICITE
 #[cfg(test)]
 mod tests {
     use crate::BNO080;
-    use embedded_hal::blocking::i2c::{Read, WriteRead, Write};
+    use embedded_hal::blocking::{
+        delay::DelayMs,
+        i2c::{Read, WriteRead, Write}
+    };
+
+    struct FakeDelay {}
+
+    impl DelayMs<u8> for FakeDelay {
+        fn delay_ms(&mut self, _ms: u8) {
+            // no-op
+        }
+    }
+
+    const RECV_BUF_LEN: usize = 256;
+    const SEND_BUF_LEN: usize = 256;
 
     struct FakeI2cPort {
-
+        pub packet_available_buf: [u8; SEND_BUF_LEN],
+        pub packet_received_buf: [u8; RECV_BUF_LEN],
     }
 
     impl FakeI2cPort {
         fn new() -> Self {
             FakeI2cPort {
-
+                packet_available_buf: [0; SEND_BUF_LEN ],
+                packet_received_buf: [0; RECV_BUF_LEN]
             }
         }
 
-//        pub fn set_available_packet(&mut self) {
-//
-//        }
+        pub fn set_available_packet(&mut self, bytes: &[u8]) {
+            self.packet_available_buf.copy_from_slice(bytes);
+        }
     }
 
     impl Read for FakeI2cPort {
         type Error = ();
 
         fn read(&mut self, _address: u8, _buffer: &mut [u8]) -> Result<(), Self::Error> {
+
             Ok(())
         }
     }
@@ -555,6 +577,7 @@ mod tests {
         type Error = ();
 
         fn write(&mut self, _addr: u8, _bytes: &[u8]) -> Result<(), Self::Error> {
+
             Ok(())
         }
     }
@@ -569,9 +592,12 @@ mod tests {
 
     #[test]
     fn test_setup() {
-        assert!(true, "oke");
+        assert!(true, "ok");
         let mock_i2c_port = FakeI2cPort::new();
-        let mut _foo = BNO080::new(mock_i2c_port);
+        let mut shub = BNO080::new(mock_i2c_port);
+        let rc = shub.init(&mut FakeDelay {} );
+        assert!(rc.is_ok(), "init failed");
+
         //assert!(foo.init().is_ok(), "init failed");
     }
 
