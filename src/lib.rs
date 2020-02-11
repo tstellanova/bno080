@@ -10,17 +10,8 @@ use embedded_hal::{
     blocking::i2c::{Read, Write, WriteRead},
 };
 use core::ops::{Shl, Shr};
-//use core::borrow::BorrowMut;
 
-//use cortex_m_log::{d_print, d_println};
-//use cortex_m_log::{
-//    destination::Itm, printer::itm::InterruptSync as InterruptSyncItm,
-//};
 
-use cortex_m::{Peripherals};
-
-//use cortex_m::{iprintln, Peripherals};
-//use cortex_m_semihosting::{ hprintln};
 
 /// the i2c address normally used by BNO080
 pub const DEFAULT_ADDRESS: u8 =  0x4A;
@@ -91,8 +82,8 @@ impl<I, E> BNO080<I>
         self
     }
 
-    // consume all available messages on the port
-    fn eat_all_messages(&mut self) {
+    /// Consume all available messages on the port without processing them
+    pub fn eat_all_messages(&mut self) {
         loop {
             let res = self.receive_packet();
             let received_len = res.unwrap_or(0);
@@ -104,7 +95,6 @@ impl<I, E> BNO080<I>
 
     fn parse_packet_header( packet: &[u8]) -> usize {
         if !(packet.len() >= PACKET_HEADER_LENGTH) {
-//            iprintln!("bogus packet? {}", packet.len()).unwrap();
             return 0;
         }
         //Bits 14:0 are used to indicate the total number of bytes in the body plus header
@@ -115,8 +105,6 @@ impl<I, E> BNO080<I>
         //let is_continuation:bool = (packet[1] & 0x80) != 0;
         //let chan_num =  packet[2];
         //let seq_num =  packet[3];
-
-        //iprintln!("plen: {} raw: {} cont {} ch {} seq {}", packet_len, raw_pack_len, is_continuation, chan_num, seq_num).unwrap();
 
         packet_len
     }
@@ -174,10 +162,7 @@ impl<I, E> BNO080<I>
     }
 
     /// read and parse all available messages from sensorhub queue
-    pub fn handle_all_messages(&mut self)  {
-        //let mut cp = Peripherals::take().unwrap();
-        //let stim = &mut cp.ITM.stim[0];
-
+    pub fn handle_all_messages(&mut self) -> u32 {
         let mut msg_count = 0;
         loop {
             let res = self.receive_packet();
@@ -191,9 +176,7 @@ impl<I, E> BNO080<I>
             }
         }
 
-        if msg_count > 0 {
-            //iprintln!(stim, "handled msgs {}", msg_count);
-        }
+        msg_count
     }
 
 //    fn receive_advertisement(&mut self) -> Result<(), Error<E>> {
@@ -218,7 +201,7 @@ impl<I, E> BNO080<I>
         //Section 5.1.1.1 :
         // On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
-       // self.eat_all_messages();
+        //self.eat_all_messages();
         self.handle_all_messages();
         delay.delay_ms(1);
         if !self.device_reset {
