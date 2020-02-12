@@ -94,13 +94,14 @@ impl<I, E> BNO080<I>
     }
 
     fn parse_packet_header( packet: &[u8]) -> usize {
-        if !(packet.len() >= PACKET_HEADER_LENGTH) {
+        const CONTINUATION_FLAG_CLEAR: u16 = !(0x80);
+        if packet.len() < PACKET_HEADER_LENGTH {
             return 0;
         }
         //Bits 14:0 are used to indicate the total number of bytes in the body plus header
         //maximum packet length is ... 32767?
-        let raw_pack_len: u16 =  (packet[0] as u16) + (packet[1] as u16).shl(8);
-        let packet_len: usize =  (raw_pack_len & (!0x8000 as u16) ) as usize;
+        let raw_pack_len: u16 =  (packet[0] as u16) + ((packet[1] as u16) & CONTINUATION_FLAG_CLEAR).shl(8);
+        let packet_len: usize =  raw_pack_len as usize; //(raw_pack_len & (!0x8000 as u16) ) as usize;
 
         //let is_continuation:bool = (packet[1] & 0x80) != 0;
         //let chan_num =  packet[2];
@@ -209,7 +210,7 @@ impl<I, E> BNO080<I>
             //self.soft_reset()?;
             //delay.delay_ms(50);
         }
-        self.verify_product_id()?;
+        //self.verify_product_id()?;
 
         self.enable_rotation_vector(500)?;
         Ok(())
@@ -446,9 +447,8 @@ impl<I, E> BNO080<I>
                 self.packet_recv_buf[0] = 0;
                 self.packet_recv_buf[1] = 0;
                 self.port.read(self.address, &mut self.packet_recv_buf[..total_packet_len]).map_err(Error::I2c)?;
-
-                Self::parse_packet_header(&self.packet_recv_buf[..total_packet_len]);
-                already_read_len = total_packet_len;
+                let packet_declared_len = Self::parse_packet_header(&self.packet_recv_buf[..PACKET_HEADER_LENGTH]);
+                already_read_len = packet_declared_len;
             }
         }
         else {
@@ -461,13 +461,13 @@ impl<I, E> BNO080<I>
                 self.seg_recv_buf[1] = 0;
 //                iprintln!("partial {} / {}", cur_read_len, remaining_len).unwrap();
                 self.port.read(self.address, &mut self.seg_recv_buf[..cur_read_len]).map_err(Error::I2c)?;
+                let packet_declared_len = Self::parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
 
-                let packet_declared_len = Self::parse_packet_header(&self.seg_recv_buf[..cur_read_len]);
                 //if we've never read any segments, transcribe the first packet header;
                 //otherwise, just transcribe the segment body (no header)
                 let transcribe_start_idx = if already_read_len > 0 { PACKET_HEADER_LENGTH } else { 0 };
                 let transcribe_len = if already_read_len > 0 { cur_read_len - PACKET_HEADER_LENGTH } else { cur_read_len };
-                //transcribe_len == cur_read_len - transcribe_start_idx
+
                 self.packet_recv_buf[already_read_len..already_read_len+transcribe_len].
                     copy_from_slice(&self.seg_recv_buf[transcribe_start_idx..cur_read_len]);
 
@@ -613,12 +613,12 @@ mod tests {
 
     #[test]
     fn test_parse_packet_header() {
-        let long_packet_len: usize = 1024;
 
         let short_packet: [u8; 2] = [ 13, 15];
         let size = BNO080::<FakeI2cPort>::parse_packet_header(&short_packet);
         assert_eq!(0, size, "truncated packet header should have length zero");
 
+        let long_packet_len: usize = 1024;
         let mut raw_packet: [u8; PACKET_HEADER_LENGTH] = [
             (long_packet_len & 0xFF) as u8 ,
             long_packet_len.shr(8)  as u8,
@@ -646,6 +646,27 @@ mod tests {
         raw_packet[1] = 0x80 | raw_packet[1];
         let size = BNO080::<FakeI2cPort>::parse_packet_header(&raw_packet);
         assert_eq!(size, short_packet_len, "verify short packet continuation");
+
+        // first (uncontinued) packet
+        raw_packet = [
+            20 as u8 ,
+            1  as u8,
+            0,
+            0
+        ];
+        let size = BNO080::<FakeI2cPort>::parse_packet_header(&raw_packet);
+        assert_eq!(size, 276, "verify > 255 packet length");
+
+        //from actual received packet
+        raw_packet = [
+            19 as u8 ,
+            129  as u8,
+            0,
+            1
+        ];
+        let size = BNO080::<FakeI2cPort>::parse_packet_header(&raw_packet);
+        assert_eq!(size, 275, "verify > 255 packet length");
+
     }
 
 }
