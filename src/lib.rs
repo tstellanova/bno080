@@ -121,7 +121,7 @@ impl<I, E> BNO080<I>
                 self.handle_input_report(received_len);
             },
             SHTP_CHAN_COMMAND => {
-                //iprintln!('command report_id: 0x{:01x}', report_id);
+
             },
             CHANNEL_EXECUTABLE => {
                 match report_id {
@@ -129,7 +129,7 @@ impl<I, E> BNO080<I>
                         self.device_reset = true;
                     },
                     _ => {
-                        //iprintln!("executable: 0x{:01x}", report_id);
+
                     }
                 }
             },
@@ -138,25 +138,24 @@ impl<I, E> BNO080<I>
                     SENSORHUB_COMMAND_RESP => {
                         let cmd_resp = msg[6];
                         if cmd_resp == SH2_STARTUP_INIT_UNSOLICITED {
-                           //  iprintln!("SH2_STARTUP_INIT_UNSOLICIT");
+
                         }
                         else {
-                           // iprintln!("SENSORHUB_COMMAND_RESP" {}",cmd_resp);
                         }
                     },
                     SENSORHUB_PROD_ID_REQ => {
-                        //iprintln!("SHTP_SENSORHUB_PROD_ID_REQ");
+
                     },
                     SENSORHUB_PROD_ID_RESP => {
-                        //iprintln!("SENSORHUB_PROD_ID_RESP");
+
                     },
                     _ =>  {
-                        //iprintln!("control: 0x{:01x}", report_id).unwrap();
+
                          }
                 }
             },
             _ => {
-                //iprintln!("unhandled chan_num: {}", chan_num).unwrap();
+
                  }
         }
 
@@ -180,21 +179,6 @@ impl<I, E> BNO080<I>
         msg_count
     }
 
-//    fn receive_advertisement(&mut self) -> Result<(), Error<E>> {
-//
-//        //let mut received_len = self.receive_packet()?;
-//
-//        loop {
-//            let received_len = self.receive_packet()?;
-//            if received_len == 0 {
-//                break;
-//            }
-//        }
-//
-//        iprintln!("recv adv done ").unwrap();
-//        Ok(())
-//        //TODO look at contents of advertisement?
-//    }
 
     /// The BNO080 starts up with all sensors disabled,
     /// waiting for the application to configure it.
@@ -205,17 +189,20 @@ impl<I, E> BNO080<I>
         //self.eat_all_messages();
         self.handle_all_messages();
         delay.delay_ms(1);
-        if !self.device_reset {
-            self.send_reinitialize_command()?;
-            //self.soft_reset()?;
-            //delay.delay_ms(50);
-        }
+//        if !self.device_reset {
+//            self.send_reinitialize_command()?;
+//            //self.soft_reset()?;
+//            //delay.delay_ms(50);
+//        }
         //self.verify_product_id()?;
 
-        self.enable_rotation_vector(500)?;
+        //self.enable_rotation_vector(500)?;
         Ok(())
     }
 
+    /// Tell the sensor to start reporting the fused rotation vector
+    /// on a regular cadence. Note that the maximum valid update rate
+    /// is 1 kHz, based on the max update rate of the sensor's gyros.
     pub fn enable_rotation_vector(&mut self, millis_between_reports: u16)  -> Result<(), Error<E>> {
         self.enable_report(SENSOR_REPORTID_ROTATION_VECTOR, millis_between_reports)
     }
