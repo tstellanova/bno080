@@ -55,6 +55,7 @@ pub struct BNO080<I>  {
 
     /// has the device been succesfully reset
     device_reset: bool,
+    prod_id_verified: bool,
 }
 
 
@@ -73,7 +74,8 @@ impl<I, E> BNO080<I>
             packet_recv_buf: [0; PACKET_RECV_BUF_LEN],
             address: DEFAULT_ADDRESS,
             port: port,
-            device_reset: false
+            device_reset: false,
+            prod_id_verified: false,
         }
     }
 
@@ -143,15 +145,12 @@ impl<I, E> BNO080<I>
                         else {
                         }
                     },
-                    SENSORHUB_PROD_ID_REQ => {
-
-                    },
                     SENSORHUB_PROD_ID_RESP => {
-
+                        self.prod_id_verified = true;
                     },
                     _ =>  {
 
-                         }
+                    }
                 }
             },
             _ => {
@@ -186,17 +185,15 @@ impl<I, E> BNO080<I>
         //Section 5.1.1.1 :
         // On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
+        // self.eat_all_messages();
+        //self.handle_all_messages();
+        self.soft_reset()?;
+        delay.delay_ms(50);
         //self.eat_all_messages();
-        self.handle_all_messages();
-        delay.delay_ms(1);
-//        if !self.device_reset {
-//            self.send_reinitialize_command()?;
-//            //self.soft_reset()?;
-//            //delay.delay_ms(50);
-//        }
-        //self.verify_product_id()?;
+        self.verify_product_id()?;
 
-        //self.enable_rotation_vector(500)?;
+        //self.send_reinitialize_command()?;
+
         Ok(())
     }
 
@@ -325,9 +322,7 @@ impl<I, E> BNO080<I>
             SENSORHUB_PROD_ID_REQ, //request product ID
             0, //reserved
             ];
-
-        self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
-        let recv_len = self.receive_packet()?;
+        let recv_len = self.send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
 
         //verify the response
         if recv_len > PACKET_HEADER_LENGTH {
@@ -358,8 +353,10 @@ impl<I, E> BNO080<I>
             0, 0, 0, 0,
         ];
         self.sequence_numbers[CHANNEL_HUB_CONTROL as usize] += 1;
+        //let resp_pack_len = self.send_and_receive_packet(CHANNEL_HUB_CONTROL, data.as_ref())?;
 
-        let resp_pack_len = self.send_and_receive_packet(CHANNEL_HUB_CONTROL, data.as_ref())?;
+        self.send_packet(CHANNEL_HUB_CONTROL, data.as_ref())?;
+        let resp_pack_len = self.receive_packet()?;
         if resp_pack_len > 0 {
             let report_id = data[PACKET_HEADER_LENGTH + 0];
             let cmd = data[PACKET_HEADER_LENGTH + 1];
@@ -377,38 +374,18 @@ impl<I, E> BNO080<I>
                 //"cmd: {}", cmd);
                 //TODO error out?
             }
-
         }
 
         Ok(())
     }
 
-//    /// Send a soft reset command to the sensor
-//    pub fn soft_reset(&mut self, delay: &mut dyn DelayMs<u8>) -> Result<(), Error<E>> {
-//        let data:[u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET]; //reset execute
-//
-//        // send command packet and ignore received packets
-////        let received_len = self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
-//        let _rc = self.send_packet(CHANNEL_EXECUTABLE, data.as_ref());
-//
-//        delay.delay_ms(50);
-//
-//        self.eat_all_messages();
-//
-////        iprintln!("received_len: {}",received_len).unwrap();
-////        //give the device time to reset
-////        delay.delay_ms(50);
-//
-//        //we may or may not receive a second garbage packet
-// //       let _res = self.receive_packet(); //TODO seems to timeout
-//
-////        let mut res = self.receive_packet();
-////        while res.is_ok() {
-////            res = self.receive_packet();
-////        }
-//
-//        Ok(())
-//    }
+   /// Send a soft reset command to the sensor
+   pub fn soft_reset(&mut self) -> Result<(), Error<E>> {
+       let data:[u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET]; //reset execute
+       // send command packet and ignore received packets
+       self.send_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
+       Ok(())
+   }
 
     /// Read just the first header bytes of a packet
     /// Return the total size of the packet that follows
@@ -494,13 +471,14 @@ const SHTP_REPORT_SET_FEATURE_COMMAND: u8 = 0xFD;
 const SENSOR_REPORTID_ROTATION_VECTOR: u8 = 0x05;
 
 /// requests
-const SENSORHUB_COMMAND_REQ:u8 =      0xF2;
-const SENSORHUB_COMMAND_RESP:u8 =       0xF1;
+const SENSORHUB_COMMAND_REQ:u8 =  0xF2;
+const SENSORHUB_COMMAND_RESP:u8 = 0xF1;
 
 
 /// executable/device channel responses
 /// Figure 1-27: SHTP executable commands and response
-//const EXECUTABLE_DEVICE_CMD_RESET: u8 =  1;
+// const EXECUTABLE_DEVICE_CMD_UNKNOWN: u8 =  0;
+const EXECUTABLE_DEVICE_CMD_RESET: u8 =  1;
 //const EXECUTABLE_DEVICE_CMD_ON: u8 =   2;
 //const EXECUTABLE_DEVICE_CMD_SLEEP =  3;
 
