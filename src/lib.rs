@@ -185,12 +185,15 @@ impl<I, E> BNO080<I>
         //Section 5.1.1.1 :
         // On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
-        // self.eat_all_messages();
-        //self.handle_all_messages();
-        self.soft_reset()?;
-        delay.delay_ms(50);
         //self.eat_all_messages();
-        self.verify_product_id()?;
+        self.handle_all_messages();
+
+        if !(self.device_reset && self.prod_id_verified) {
+            self.soft_reset()?;
+            delay.delay_ms(50);
+            self.eat_all_messages();
+            self.verify_product_id()?;
+        }
 
         //self.send_reinitialize_command()?;
 
@@ -258,36 +261,36 @@ impl<I, E> BNO080<I>
 
     /// Send a packet and receive the response packet
     /// return the length of the response packet received
-    fn send_and_receive_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<usize, Error<E>> {
-        let packet_length = body_data.len() + PACKET_HEADER_LENGTH;
-        let packet_header = [
-            (packet_length & 0xFF) as u8, //LSB
-            packet_length.shr(8) as u8, //MSB
-            channel,
-            self.sequence_numbers[channel as usize]
-        ];
-        self.sequence_numbers[channel as usize] += 1;
+    // fn send_and_receive_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<usize, Error<E>> {
+    //     let packet_length = body_data.len() + PACKET_HEADER_LENGTH;
+    //     let packet_header = [
+    //         (packet_length & 0xFF) as u8, //LSB
+    //         packet_length.shr(8) as u8, //MSB
+    //         channel,
+    //         self.sequence_numbers[channel as usize]
+    //     ];
+    //     self.sequence_numbers[channel as usize] += 1;
 
-        let body_len = body_data.len();
-        let total_send_len = PACKET_HEADER_LENGTH + body_len;
-        self.packet_send_buf[..PACKET_HEADER_LENGTH].copy_from_slice(packet_header.as_ref());
-        self.packet_send_buf[PACKET_HEADER_LENGTH..total_send_len].copy_from_slice(body_data);
+    //     let body_len = body_data.len();
+    //     let total_send_len = PACKET_HEADER_LENGTH + body_len;
+    //     self.packet_send_buf[..PACKET_HEADER_LENGTH].copy_from_slice(packet_header.as_ref());
+    //     self.packet_send_buf[PACKET_HEADER_LENGTH..total_send_len].copy_from_slice(body_data);
 
-        self.seg_recv_buf[0] = 0;
-        self.seg_recv_buf[1] = 0;
+    //     self.seg_recv_buf[0] = 0;
+    //     self.seg_recv_buf[1] = 0;
 
-        //write the full packet and receive back the response packet header
-        self.port.write_read(self.address,
-                             &self.packet_send_buf[0..total_send_len],
-                             &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH]).
-            map_err(Error::I2c)?;
-        let response_packet_len = Self::parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
+    //     //write the full packet and receive back the response packet header
+    //     self.port.write_read(self.address,
+    //                          &self.packet_send_buf[0..total_send_len],
+    //                          &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH]).
+    //         map_err(Error::I2c)?;
+    //     let response_packet_len = Self::parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
 
-        //now read the full (size known) packet
-        let received_len = self.read_sized_packet( response_packet_len)?;
+    //     //now read the full (size known) packet
+    //     let received_len = self.read_sized_packet( response_packet_len)?;
 
-        Ok(received_len)
-    }
+    //     Ok(received_len)
+    // }
 
     /// Send a standard packet header followed by the body data provided
     fn send_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<(), Error<E>> {
@@ -322,25 +325,20 @@ impl<I, E> BNO080<I>
             SENSORHUB_PROD_ID_REQ, //request product ID
             0, //reserved
             ];
-        let recv_len = self.send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
+        self.send_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
+        let recv_len = self.receive_packet()?;
 
         //verify the response
         if recv_len > PACKET_HEADER_LENGTH {
             //iprintln!("resp: {:?}", &self.msg_buf[..recv_len]).unwrap();
-            //TODO this sometimes doesn't match because another response interjects
             let report_id = self.packet_recv_buf[PACKET_HEADER_LENGTH + 0];
-            if SENSORHUB_PROD_ID_RESP != report_id {
-//                iprintln!("prod_id report_id: {} ??", report_id).unwrap();
-                return Err(Error::InvalidChipId(0));
+            if SENSORHUB_PROD_ID_RESP == report_id {
+                self.prod_id_verified = true;
+                return Ok(())
             }
-
-//            let sw_ver_major = self.msg_buf[2];
-//            let sw_ver_minor = self.msg_buf[3];
-//            iprintln!("FW version: {}.{} ", sw_ver_major, sw_ver_minor).unwrap();
-            //TODO detect invalid sw version
         }
 
-        Ok(())
+        return Err(Error::InvalidChipId(0));
     }
 
     fn send_reinitialize_command(&mut self) -> Result<(), Error<E>> {
