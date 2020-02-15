@@ -181,7 +181,7 @@ impl<I, E> BNO080<I>
                 let received_len = res.unwrap_or(0);
                 if received_len > 0 {
                     msg_count += 1;
-                    //self.handle_one_message(received_len);
+                    self.handle_one_message(received_len);
                 }
                 else {
                     break;
@@ -216,8 +216,8 @@ impl<I, E> BNO080<I>
         self.enable_report(SENSOR_REPORTID_ROTATION_VECTOR, millis_between_reports)
     }
 
-    pub fn enable_report(&mut self, report_id: u8, millis_between_reports: u16)  -> Result<(), Error<E>> {
-//        iprintln!("enable_report: {}", report_id).unwrap();
+    /// Enable a particular report
+    fn enable_report(&mut self, report_id: u8, millis_between_reports: u16)  -> Result<(), Error<E>> {
         let micros_between_reports: u32 = (millis_between_reports as u32) * 1000;
         let cmd_body: [u8; 17] = [
             SHTP_REPORT_SET_FEATURE_COMMAND,
@@ -238,8 +238,6 @@ impl<I, E> BNO080<I>
             0,
             0, // MSB sensor-specific config
         ];
-
-        //iprintln!("cmd_body: {:?}", cmd_body).unwrap();
 
         self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
         Ok(())
@@ -268,8 +266,6 @@ impl<I, E> BNO080<I>
         }
     }
 
-
-
     /// Send a standard packet header followed by the body data provided
     fn send_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<(), Error<E>> {
         let packet_length = body_data.len() + PACKET_HEADER_LENGTH;
@@ -293,7 +289,10 @@ impl<I, E> BNO080<I>
     fn receive_packet(&mut self) -> Result<usize, Error<E>> {
         let packet_len:usize = self.read_unsized_packet()?;
 
-        self.received_packet_count += 1;
+        if  packet_len > 0 {
+            self.received_packet_count += 1;
+        }
+
         let received_len =
             if packet_len > PACKET_HEADER_LENGTH {
                 self.read_sized_packet(packet_len)?
@@ -305,14 +304,21 @@ impl<I, E> BNO080<I>
         Ok(received_len)
     }
 
+    /// Send a packet and receive the response
+    fn send_and_receive_packet(&mut self, channel: u8, body_data: &[u8]) ->  Result<usize, Error<E>> {
+        //TODO reimplement with WriteRead once that interface is stable
+        self.send_packet(channel, body_data)?;
+        self.receive_packet()
+    }
+
     /// check for a valid product ID response from sensor
     fn verify_product_id(&mut self) -> Result<(), Error<E>> {
         let cmd_body: [u8; 2] = [
             SENSORHUB_PROD_ID_REQ, //request product ID
             0, //reserved
             ];
-        self.send_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
-        let recv_len = self.receive_packet()?;
+
+        let recv_len = self.send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
 
         //verify the response
         if recv_len > PACKET_HEADER_LENGTH {
