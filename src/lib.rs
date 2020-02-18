@@ -132,7 +132,14 @@ impl<I, E> BNO080<I>
                 self.handle_input_report(received_len);
             },
             SHTP_CHAN_COMMAND => {
+                match report_id {
+                    0 => { //RESP_ADVERTISE
+                        self.handle_advertise_response(received_len);
+                    },
+                    _ => {
 
+                    }
+                }
             },
             CHANNEL_EXECUTABLE => {
                 match report_id {
@@ -267,6 +274,20 @@ impl<I, E> BNO080<I>
                 //iprintln!("handle_input_report[{}]: 0x{:01x} ", received_len, feature_report_id).unwrap();
             }
         }
+    }
+
+    fn handle_advertise_response(&mut self, received_len: usize) {
+        let payload_len = received_len - PACKET_HEADER_LENGTH;
+        let payload = &self.packet_recv_buf[PACKET_HEADER_LENGTH..received_len];
+        let mut cursor:usize = 1; //skip response type
+
+        while cursor < payload_len {
+            let _tag: u8 = payload[cursor]; cursor += 1;
+            let len: u8 = payload[cursor]; cursor +=1;
+            //let val: u8 = payload + cursor;
+            cursor += len as usize;
+        }
+
     }
 
     // WRITE: 0x4a 0x05 0x00 0x01 0x00 0x01
@@ -709,7 +730,21 @@ mod tests {
         assert!(rc.is_ok());
         let recv_len = rc.unwrap_or(0);
         assert_eq!(recv_len, size, "wrong length");
-        
+    }
+
+    #[test]
+    fn test_handle_adv_message() {
+        //handle_all_messages
+        let mut mock_i2c_port = FakeI2cPort::new();
+
+        //actual startup response packet
+        let raw_packet = ADVERTISING_PACKET_FULL;
+        mock_i2c_port.add_available_packet( &raw_packet);
+
+        let mut shub = BNO080::new(mock_i2c_port);
+        let msg_count = shub.handle_all_messages();
+        assert_eq!(msg_count, 1, "wrong msg_count");
+
     }
 
     // Actual advertising packet received from sensor:
