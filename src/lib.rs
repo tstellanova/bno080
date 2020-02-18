@@ -34,7 +34,10 @@ pub enum Error<E> {
     /// Invalid chip ID was read
     InvalidChipId(u8),
     /// Unsupported sensor firmware version
-    InvalidFWVersion(u8)
+    InvalidFWVersion(u8),
+
+    /// Not enough data available to fulfill the read
+    NoDataAvailable(u8),
 }
 
 pub struct BNO080<I>  {
@@ -66,7 +69,7 @@ pub struct BNO080<I>  {
 
 impl<I, E> BNO080<I>
     where
-        I: Read<Error = E> + Write<Error = E> + WriteRead<Error = E>,
+        I: Read<Error = E> + Write<Error = E> + WriteRead<Error = E>,  E: core::fmt::Debug
 {
     pub fn new(port: I) -> Self {
         BNO080 {
@@ -181,17 +184,18 @@ impl<I, E> BNO080<I>
     /// read and parse all available messages from sensorhub queue
     pub fn handle_all_messages(&mut self) -> u32 {
         let mut msg_count = 0;
-        loop {
+        for _i in 0..2 {
             let res = self.receive_packet();
             if res.is_err() {
-                msg_count = msg_count;
+                //let le_err = res.unwrap_err();
+                //panic!("no joy:  {:?}", le_err);
                 break;
             }
             else {
                 let received_len = res.unwrap_or(0);
                 if received_len > 0 {
                     msg_count += 1;
-                    self.handle_one_message(received_len);
+                    //self.handle_one_message(received_len);
                 }
                 else {
                     break;
@@ -580,13 +584,15 @@ mod tests {
                 remainder_packet.buf[1] = ((((remainder_len+4) & 0xFF00) as u16).shr(8) as u8) | 0x80; //set continuation flag
                 self.available_packets.push_front(remainder_packet);
             }
-            else { //src_len <= dest_len
+            else if src_len == dest_len {
                 let read_len = src_len;
                 buffer[..read_len].copy_from_slice(&next_pack.buf[..read_len]);
             }
+            else { // src_len < dest_len
+                return Err(())
+            }
 
             Ok(())
-
         }
     }
 
@@ -679,6 +685,87 @@ mod tests {
         assert!(rc.is_ok());
         let next_packet_size = rc.unwrap_or(0);
         assert_eq!(next_packet_size, 276, "wrong length");
+    }
+
+    #[test]
+    fn test_receive_unsized_under() {
+        let mut mock_i2c_port = FakeI2cPort::new();
+
+        let packet: [u8; 3] = [0; 3];
+        mock_i2c_port.add_available_packet( &packet);
+
+        let mut shub = BNO080::new(mock_i2c_port);
+        let rc = shub.read_unsized_packet();
+        assert!(rc.is_err());
+    }
+
+
+    pub const MIDPACK: [u8; 52] = [
+        0x34,
+        0x80,
+        0x02,
+        0x7B,
+        0xF8,
+        0x00,
+        0x01,
+        0x02,
+        0x96,
+        0xA4,
+        0x98,
+        0x00,
+        0xE6,
+        0x00,
+        0x00,
+        0x00,
+        0x04,
+        0x00,
+        0x00,
+        0x00,
+        0xF8,
+        0x00,
+        0x04,
+        0x04,
+        0x36,
+        0xA3,
+        0x98,
+        0x00,
+        0x95,
+        0x01,
+        0x00,
+        0x00,
+        0x02,
+        0x00,
+        0x00,
+        0x00,
+        0xF8,
+        0x00,
+        0x04,
+        0x02,
+        0xE3,
+        0xA2,
+        0x98,
+        0x00,
+        0xD9,
+        0x01,
+        0x00,
+        0x00,
+        0x07,
+        0x00,
+        0x00,
+        0x00,
+    ];
+
+    #[test]
+    fn test_receive_midpack() {
+        let mut mock_i2c_port = FakeI2cPort::new();
+
+        let packet = MIDPACK;
+        mock_i2c_port.add_available_packet( &packet);
+
+        let mut shub = BNO080::new(mock_i2c_port);
+        let rc = shub.receive_packet();
+        assert!(rc.is_ok());
+
     }
     
     #[test]
