@@ -5,6 +5,7 @@ LICENSE: See LICENSE file
 
 #![no_std]
 
+
 use embedded_hal::{
     blocking::delay::DelayMs,
     blocking::i2c::{Read, Write, WriteRead},
@@ -13,17 +14,18 @@ use core::ops::{Shl, Shr};
 
 
 
+
 /// the i2c address normally used by BNO080
-pub const DEFAULT_ADDRESS: u8 =  0x4A;
+pub const DEFAULT_ADDRESS: u8 =  0x4A; //TODO  0x6B; //  for LSM9DS1
 /// alternate i2c address for BNO080
 pub const ALTERNATE_ADDRESS: u8 =  0x4B;
 
 const PACKET_SEND_BUF_LEN: usize = 256;
-const SEG_RECV_BUF_LEN: usize = 256;
-const PACKET_RECV_BUF_LEN: usize = 1024;
+const SEG_RECV_BUF_LEN: usize = 128;
+const PACKET_RECV_BUF_LEN: usize = 512;
 
 /// the maximum number of bytes we can read from the device at one time
-const MAX_TRANSFER_READ: usize = 255;///TODO i2c max transfer seems to be this, verify dynamically
+const MAX_SEGMENT_READ: usize = SEG_RECV_BUF_LEN ;
 
 /// All possible errors in this crate
 #[derive(Debug)]
@@ -101,7 +103,6 @@ impl<I, E> BNO080<I>
     pub fn get_received_packet_count(&self) -> u32 {
         self.received_packet_count
     }
-
 
     fn parse_packet_header( packet: &[u8]) -> usize {
         const CONTINUATION_FLAG_CLEAR: u16 = !(0x80);
@@ -200,10 +201,12 @@ impl<I, E> BNO080<I>
         // On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
         self.eat_all_messages();
+        //self.soft_reset()?;
+        delay.delay_ms(100);
+        //self.eat_all_messages();
+        // delay.delay_ms(50);
+        // self.eat_all_messages();
 
-        self.soft_reset()?;
-        delay.delay_ms(50);
-        self.eat_all_messages();
         self.verify_product_id()?;
 
         Ok(())
@@ -266,6 +269,7 @@ impl<I, E> BNO080<I>
         }
     }
 
+    // WRITE: 0x4a 0x05 0x00 0x01 0x00 0x01
     /// Send a standard packet header followed by the body data provided
     fn send_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<(), Error<E>> {
         let packet_length = body_data.len() + PACKET_HEADER_LENGTH;
@@ -338,8 +342,9 @@ impl<I, E> BNO080<I>
    pub fn soft_reset(&mut self) -> Result<(), Error<E>> {
        let data:[u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET]; //reset execute
        // send command packet and ignore received packets
-       self.send_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
-       Ok(())
+    //    self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
+    //    Ok(())
+       self.send_packet(CHANNEL_EXECUTABLE, data.as_ref())
    }
 
     /// Read just the first header bytes of a packet
@@ -350,6 +355,7 @@ impl<I, E> BNO080<I>
         self.port.read(self.address, &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH]).map_err(Error::I2c)?;
         let packet_len = Self::parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
         Ok(packet_len)
+        
     }
 
 
@@ -360,7 +366,7 @@ impl<I, E> BNO080<I>
         let mut remaining_len: usize = total_packet_len;
         let mut already_read_len: usize = 0;
 
-        if total_packet_len < MAX_TRANSFER_READ {
+        if total_packet_len < MAX_SEGMENT_READ {
             if total_packet_len > 0 {
                 //iprintln!("simple read: {}",total_packet_len).unwrap();
                 self.packet_recv_buf[0] = 0;
@@ -372,28 +378,25 @@ impl<I, E> BNO080<I>
         }
         else {
             while remaining_len > 0 {
-                //TODO simplify and test this directly
-                let mut cur_read_len = remaining_len;
-                if cur_read_len > MAX_TRANSFER_READ { cur_read_len = MAX_TRANSFER_READ; }
+                let segment_read_len =
+                    if remaining_len > MAX_SEGMENT_READ { MAX_SEGMENT_READ }
+                    else { remaining_len + PACKET_HEADER_LENGTH };
 
                 self.seg_recv_buf[0] = 0;
                 self.seg_recv_buf[1] = 0;
-//                iprintln!("partial {} / {}", cur_read_len, remaining_len).unwrap();
-                self.port.read(self.address, &mut self.seg_recv_buf[..cur_read_len]).map_err(Error::I2c)?;
-                let packet_declared_len = Self::parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
+                self.port.read(self.address, &mut self.seg_recv_buf[..segment_read_len]).map_err(Error::I2c)?;
 
                 //if we've never read any segments, transcribe the first packet header;
                 //otherwise, just transcribe the segment body (no header)
                 let transcribe_start_idx = if already_read_len > 0 { PACKET_HEADER_LENGTH } else { 0 };
-                let transcribe_len = if already_read_len > 0 { cur_read_len - PACKET_HEADER_LENGTH } else { cur_read_len };
-
+                let transcribe_len = if already_read_len > 0 { segment_read_len - PACKET_HEADER_LENGTH } else { segment_read_len };
                 self.packet_recv_buf[already_read_len..already_read_len+transcribe_len].
-                    copy_from_slice(&self.seg_recv_buf[transcribe_start_idx..cur_read_len]);
+                    copy_from_slice(&self.seg_recv_buf[transcribe_start_idx..transcribe_start_idx+transcribe_len]);
 
-                remaining_len = packet_declared_len - cur_read_len;
-                if remaining_len > 0 { remaining_len += PACKET_HEADER_LENGTH};
-                already_read_len += cur_read_len;
-//                iprintln!("already {} remaining {}", already_read_len, remaining_len).unwrap();
+                let body_read_len = segment_read_len - PACKET_HEADER_LENGTH;
+                already_read_len += body_read_len;
+                remaining_len -= body_read_len;
+
             }
         }
 
@@ -460,12 +463,16 @@ const SH2_STARTUP_INIT_UNSOLICITED:u8 = SH2_CMD_INITIALIZE | SH2_INIT_UNSOLICITE
 
 #[cfg(test)]
 mod tests {
+
+    extern crate std;
+
     use crate::{BNO080, PACKET_HEADER_LENGTH};
     use embedded_hal::blocking::{
         delay::DelayMs,
         i2c::{Read, WriteRead, Write}
     };
     use core::ops::Shr;
+    use std::collections::VecDeque;
 
     struct FakeDelay {}
 
@@ -477,31 +484,89 @@ mod tests {
 
     const RECV_BUF_LEN: usize = 512;
     const SEND_BUF_LEN: usize = 512;
+    const MAX_FAKE_PACKET_SIZE: usize = 512;
+
+    //divides up packets into segments
+    struct FakePacket {
+        pub len: usize,
+        pub buf: [u8; MAX_FAKE_PACKET_SIZE],
+    }
+
+    impl FakePacket {
+        pub fn new_from_slice(slice: &[u8]) -> Self {
+            let src_len = slice.len();
+            let mut inst = Self {
+                len: src_len,
+                buf: [0; MAX_FAKE_PACKET_SIZE],
+            };
+            inst.buf[..src_len].copy_from_slice(&slice);
+            inst
+        }
+    }
 
     struct FakeI2cPort {
         pub packet_available_buf: [u8; SEND_BUF_LEN],
         pub packet_received_buf: [u8; RECV_BUF_LEN],
+        pub available_packets: VecDeque<FakePacket>,
     }
 
     impl FakeI2cPort {
         fn new() -> Self {
             FakeI2cPort {
                 packet_available_buf: [0; SEND_BUF_LEN ],
-                packet_received_buf: [0; RECV_BUF_LEN]
+                packet_received_buf: [0; RECV_BUF_LEN],
+                available_packets: VecDeque::with_capacity(3),
             }
         }
 
-        pub fn set_available_packet(&mut self, bytes: &[u8]) {
-            self.packet_available_buf[..bytes.len()].copy_from_slice(bytes);
+        pub fn add_available_packet(&mut self, bytes: &[u8]) {
+            let pack = FakePacket::new_from_slice(bytes);
+            self.available_packets.push_back(pack);
         }
+
     }
 
     impl Read for FakeI2cPort {
         type Error = ();
 
         fn read(&mut self, _address: u8, buffer: &mut [u8]) -> Result<(), Self::Error> {
-            buffer.copy_from_slice(&self.packet_available_buf[..buffer.len()]);
+            let next_pack = self.available_packets.pop_front().unwrap_or(
+                FakePacket {
+                    len: 0,
+                    buf: [0; MAX_FAKE_PACKET_SIZE],
+                }
+            );
+
+            let src_len = next_pack.len;
+            if src_len == 0 {
+                return Ok(())
+            }
+
+            let dest_len = buffer.len();
+
+            if src_len <= dest_len {
+                let read_len = src_len;
+                buffer[..read_len].copy_from_slice(&next_pack.buf[..read_len]);
+            }
+            else {
+                //only read as much as the reader has room for,
+                //then push the remainder back onto the queue as a remainder packet
+                let read_len = dest_len;
+                buffer[..read_len].copy_from_slice(&next_pack.buf[..read_len]);
+                let remainder_len = src_len - read_len;
+                let mut remainder_packet = FakePacket {
+                    len: remainder_len + 4,
+                    buf: [0; MAX_FAKE_PACKET_SIZE],
+                };
+                remainder_packet.buf[PACKET_HEADER_LENGTH..PACKET_HEADER_LENGTH+remainder_len]
+                    .copy_from_slice(&next_pack.buf[read_len..read_len+remainder_len]);
+                remainder_packet.buf[0] = ((remainder_len+4) & 0xFF) as u8;
+                remainder_packet.buf[1] = ((((remainder_len+4) & 0xFF00) as u16).shr(8) as u8) | 0x80; //set continuation flag
+                self.available_packets.push_front(remainder_packet);
+            }
+
             Ok(())
+
         }
     }
 
@@ -522,29 +587,7 @@ mod tests {
         }
     }
 
-//    #[test]
-//    fn test_setup() {
-//        assert!(true, "ok");
-//        let mock_i2c_port = FakeI2cPort::new();
-//        let mut shub = BNO080::new(mock_i2c_port);
-//        let rc = shub.init(&mut FakeDelay {} );
-//        assert!(rc.is_ok(), "init failed");
-//    }
 
-    #[test]
-    fn test_receive_packet() {
-        assert!(true, "ok");
-        let mut mock_i2c_port = FakeI2cPort::new();
-        let mut raw_packet: [u8; 290] =  [0; 290];
-        raw_packet[0] = 0xD2;
-        mock_i2c_port.set_available_packet( &raw_packet);
-
-        let mut shub = BNO080::new(mock_i2c_port);
-        let rc = shub.receive_packet();
-        let recv_len = rc.unwrap_or(0);
-        assert_eq!(recv_len, 0xD2, "wrong length");
-
-    }
 
     #[test]
     fn test_parse_packet_header() {
@@ -603,5 +646,87 @@ mod tests {
         assert_eq!(size, 275, "verify > 255 packet length");
 
     }
+
+
+    #[test]
+    fn test_receive_unsized() {
+        let mut mock_i2c_port = FakeI2cPort::new();
+
+        let packet  = ADVERTISING_PACKET_FIRST_HEADER;
+        mock_i2c_port.add_available_packet( &packet);
+
+        let mut shub = BNO080::new(mock_i2c_port);
+        let rc = shub.read_unsized_packet();
+        assert!(rc.is_ok());
+        let next_packet_size = rc.unwrap_or(0);
+        assert_eq!(next_packet_size, 276, "wrong length");
+
+    }
+
+    #[test]
+    fn test_read_unsized_large() {
+        let mut mock_i2c_port = FakeI2cPort::new();
+
+        let packet  = ADVERTISING_PACKET_FULL;
+        mock_i2c_port.add_available_packet( &packet);
+
+        let mut shub = BNO080::new(mock_i2c_port);
+
+        let rc = shub.read_unsized_packet();
+        assert!(rc.is_ok());
+        let next_packet_size = rc.unwrap_or(0);
+        assert_eq!(next_packet_size, 276, "wrong length");
+
+    }
+
+    #[test]
+    fn test_receive_sized_large() {
+        let mut mock_i2c_port = FakeI2cPort::new();
+
+        let packet  = ADVERTISING_PACKET_FULL;
+        mock_i2c_port.add_available_packet( &packet);
+
+        let mut shub = BNO080::new(mock_i2c_port);
+
+        let rc = shub.read_sized_packet(276);
+        assert!(rc.is_ok());
+        let next_packet_size = rc.unwrap_or(0);
+        assert_eq!(next_packet_size, 276, "wrong length");
+    }
+
+    #[test]
+    fn test_receive_startup() {
+        let mut mock_i2c_port = FakeI2cPort::new();
+
+        //actual startup response packet
+        let raw_packet = ADVERTISING_PACKET_FULL;
+        let size = BNO080::<FakeI2cPort>::parse_packet_header(&raw_packet);
+        assert_eq!(size, ADVERTISING_PACKET_FULL.len(), "verify packet length");
+        mock_i2c_port.add_available_packet( &raw_packet);
+
+        let mut shub = BNO080::new(mock_i2c_port);
+        let rc = shub.receive_packet();
+        assert!(rc.is_ok());
+        let recv_len = rc.unwrap_or(0);
+        assert_eq!(recv_len, size, "wrong length");
+        
+    }
+
+    // Actual advertising packet received from sensor:
+    pub const ADVERTISING_PACKET_FULL: [u8; 276] = [
+        0x14, 0x81, 0x00, 0x01,
+        0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x80, 0x06, 0x31, 0x2e, 0x30, 0x2e, 0x30, 0x00, 0x02, 0x02, 0x00, 0x01, 0x03, 0x02, 0xff, 0x7f, 0x04, 0x02, 0x00, 0x01, 0x05,
+        0x02, 0xff, 0x7f, 0x08, 0x05, 0x53, 0x48, 0x54, 0x50, 0x00, 0x06, 0x01, 0x00, 0x09, 0x08, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x00, 0x01, 0x04, 0x01, 0x00, 0x00,
+        0x00, 0x08, 0x0b, 0x65, 0x78, 0x65, 0x63, 0x75, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x00, 0x06, 0x01, 0x01, 0x09, 0x07, 0x64, 0x65, 0x76, 0x69, 0x63, 0x65, 0x00, 0x01, 0x04,
+        0x02, 0x00, 0x00, 0x00, 0x08, 0x0a, 0x73, 0x65, 0x6e, 0x73, 0x6f, 0x72, 0x68, 0x75, 0x62, 0x00, 0x06, 0x01, 0x02, 0x09, 0x08, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c,
+        0x00, 0x06, 0x01, 0x03, 0x09, 0x0c, 0x69, 0x6e, 0x70, 0x75, 0x74, 0x4e, 0x6f, 0x72, 0x6d, 0x61, 0x6c, 0x00, 0x07, 0x01, 0x04, 0x09, 0x0a, 0x69, 0x6e, 0x70, 0x75, 0x74,
+        0x57, 0x61, 0x6b, 0x65, 0x00, 0x06, 0x01, 0x05, 0x09, 0x0c, 0x69, 0x6e, 0x70, 0x75, 0x74, 0x47, 0x79, 0x72, 0x6f, 0x52, 0x76, 0x00, 0x80, 0x06, 0x31, 0x2e, 0x31, 0x2e,
+        0x30, 0x00, 0x81, 0x64, 0xf8, 0x10, 0xf5, 0x04, 0xf3, 0x10, 0xf1, 0x10, 0xfb, 0x05, 0xfa, 0x05, 0xfc, 0x11, 0xef, 0x02, 0x01, 0x0a, 0x02, 0x0a, 0x03, 0x0a, 0x04, 0x0a,
+        0x05, 0x0e, 0x06, 0x0a, 0x07, 0x10, 0x08, 0x0c, 0x09, 0x0e, 0x0a, 0x08, 0x0b, 0x08, 0x0c, 0x06, 0x0d, 0x06, 0x0e, 0x06, 0x0f, 0x10, 0x10, 0x05, 0x11, 0x0c, 0x12, 0x06,
+        0x13, 0x06, 0x14, 0x10, 0x15, 0x10, 0x16, 0x10, 0x17, 0x00, 0x18, 0x08, 0x19, 0x06, 0x1a, 0x00, 0x1b, 0x00, 0x1c, 0x06, 0x1d, 0x00, 0x1e, 0x10, 0x1f, 0x00, 0x20, 0x00,
+        0x21, 0x00, 0x22, 0x00, 0x23, 0x00, 0x24, 0x00, 0x25, 0x00, 0x26, 0x00, 0x27, 0x00, 0x28, 0x0e, 0x29, 0x0c, 0x2a, 0x0e
+    ];
+
+    pub const ADVERTISING_PACKET_FIRST_HEADER: [u8; 4] = [0x14, 0x01, 0x00, 0x00];
 
 }
