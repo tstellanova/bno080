@@ -13,15 +13,13 @@ use embedded_hal::{
 use core::ops::{Shl, Shr};
 
 
-
-
 /// the i2c address normally used by BNO080
-pub const DEFAULT_ADDRESS: u8 =  0x4A; //TODO  0x6B; //  for LSM9DS1
+pub const DEFAULT_ADDRESS: u8 =  0x4A;
 /// alternate i2c address for BNO080
 pub const ALTERNATE_ADDRESS: u8 =  0x4B;
 
 const PACKET_SEND_BUF_LEN: usize = 256;
-const SEG_RECV_BUF_LEN: usize = 128;
+const SEG_RECV_BUF_LEN: usize = 32;
 const PACKET_RECV_BUF_LEN: usize = 512;
 
 /// the maximum number of bytes we can read from the device at one time
@@ -53,7 +51,7 @@ pub struct BNO080<I>  {
     address: u8,
 
     /// i2c port
-    port:  I,
+    i2c_port:  I,
 
     /// has the device been succesfully reset
     device_reset: bool,
@@ -77,7 +75,7 @@ impl<I, E> BNO080<I>
             seg_recv_buf: [0; SEG_RECV_BUF_LEN],
             packet_recv_buf: [0; PACKET_RECV_BUF_LEN],
             address: DEFAULT_ADDRESS,
-            port: port,
+            i2c_port: port,
             device_reset: false,
             prod_id_verified: false,
             received_packet_count: 0,
@@ -90,12 +88,16 @@ impl<I, E> BNO080<I>
     }
 
     /// Consume all available messages on the port without processing them
-    pub fn eat_all_messages(&mut self) {
+    pub fn eat_all_messages(&mut self,  delay: &mut dyn DelayMs<u8>) {
         loop {
             let res = self.receive_packet();
             let received_len = res.unwrap_or(0);
             if received_len == 0 {
                 break;
+            }
+            else {
+                //give some time to other parts of the system
+                delay.delay_ms(2);
             }
         }
     }
@@ -207,12 +209,12 @@ impl<I, E> BNO080<I>
         //Section 5.1.1.1 :
         // On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
-        self.eat_all_messages();
-        //self.soft_reset()?;
-        delay.delay_ms(100);
-        //self.eat_all_messages();
-        // delay.delay_ms(50);
-        // self.eat_all_messages();
+
+        self.soft_reset()?;
+        delay.delay_ms(50);
+        self.eat_all_messages(delay);
+        delay.delay_ms(50);
+        self.eat_all_messages(delay);
 
         self.verify_product_id()?;
 
@@ -307,7 +309,8 @@ impl<I, E> BNO080<I>
         self.packet_send_buf[..PACKET_HEADER_LENGTH].copy_from_slice(packet_header.as_ref());
         self.packet_send_buf[PACKET_HEADER_LENGTH..total_send_len].copy_from_slice(body_data);
 
-        self.port.write(self.address, &self.packet_send_buf[0..total_send_len]).map_err(Error::I2c)
+        self.i2c_port.write(self.address, &self.packet_send_buf[0..total_send_len]).map_err(Error::I2c)
+
     }
 
     /// Read one packet into the receive buffer
@@ -373,7 +376,7 @@ impl<I, E> BNO080<I>
     fn read_unsized_packet(&mut self) -> Result<usize, Error<E>> {
         self.seg_recv_buf[0] = 0;
         self.seg_recv_buf[1] = 0;
-        self.port.read(self.address, &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH]).map_err(Error::I2c)?;
+        self.i2c_port.read(self.address, &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH]).map_err(Error::I2c)?;
         let packet_len = Self::parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
         Ok(packet_len)
         
@@ -392,7 +395,7 @@ impl<I, E> BNO080<I>
                 //iprintln!("simple read: {}",total_packet_len).unwrap();
                 self.packet_recv_buf[0] = 0;
                 self.packet_recv_buf[1] = 0;
-                self.port.read(self.address, &mut self.packet_recv_buf[..total_packet_len]).map_err(Error::I2c)?;
+                self.i2c_port.read(self.address, &mut self.packet_recv_buf[..total_packet_len]).map_err(Error::I2c)?;
                 let packet_declared_len = Self::parse_packet_header(&self.packet_recv_buf[..PACKET_HEADER_LENGTH]);
                 already_read_len = packet_declared_len;
             }
@@ -405,7 +408,8 @@ impl<I, E> BNO080<I>
 
                 self.seg_recv_buf[0] = 0;
                 self.seg_recv_buf[1] = 0;
-                self.port.read(self.address, &mut self.seg_recv_buf[..segment_read_len]).map_err(Error::I2c)?;
+                self.i2c_port.read(self.address, &mut self.seg_recv_buf[..segment_read_len]).map_err(Error::I2c)?;
+                //let packet_declared_len = Self::parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
 
                 //if we've never read any segments, transcribe the first packet header;
                 //otherwise, just transcribe the segment body (no header)
@@ -503,8 +507,6 @@ mod tests {
         }
     }
 
-    const RECV_BUF_LEN: usize = 512;
-    const SEND_BUF_LEN: usize = 512;
     const MAX_FAKE_PACKET_SIZE: usize = 512;
 
     //divides up packets into segments
@@ -526,20 +528,17 @@ mod tests {
     }
 
     struct FakeI2cPort {
-        pub packet_available_buf: [u8; SEND_BUF_LEN],
-        pub packet_received_buf: [u8; RECV_BUF_LEN],
         pub available_packets: VecDeque<FakePacket>,
     }
 
     impl FakeI2cPort {
         fn new() -> Self {
             FakeI2cPort {
-                packet_available_buf: [0; SEND_BUF_LEN ],
-                packet_received_buf: [0; RECV_BUF_LEN],
                 available_packets: VecDeque::with_capacity(3),
             }
         }
 
+        /// Enqueue a packet to be received later
         pub fn add_available_packet(&mut self, bytes: &[u8]) {
             let pack = FakePacket::new_from_slice(bytes);
             self.available_packets.push_back(pack);
@@ -565,11 +564,7 @@ mod tests {
 
             let dest_len = buffer.len();
 
-            if src_len <= dest_len {
-                let read_len = src_len;
-                buffer[..read_len].copy_from_slice(&next_pack.buf[..read_len]);
-            }
-            else {
+            if src_len > dest_len {
                 //only read as much as the reader has room for,
                 //then push the remainder back onto the queue as a remainder packet
                 let read_len = dest_len;
@@ -585,6 +580,10 @@ mod tests {
                 remainder_packet.buf[1] = ((((remainder_len+4) & 0xFF00) as u16).shr(8) as u8) | 0x80; //set continuation flag
                 self.available_packets.push_front(remainder_packet);
             }
+            else { //src_len <= dest_len
+                let read_len = src_len;
+                buffer[..read_len].copy_from_slice(&next_pack.buf[..read_len]);
+            }
 
             Ok(())
 
@@ -595,7 +594,6 @@ mod tests {
         type Error = ();
 
         fn write(&mut self, _addr: u8, _bytes: &[u8]) -> Result<(), Self::Error> {
-            //self.packet_received_buf.copy_from_slice(&bytes[..self.packet_received_buf.len()]);
             Ok(())
         }
     }
@@ -681,9 +679,8 @@ mod tests {
         assert!(rc.is_ok());
         let next_packet_size = rc.unwrap_or(0);
         assert_eq!(next_packet_size, 276, "wrong length");
-
     }
-
+    
     #[test]
     fn test_read_unsized_large() {
         let mut mock_i2c_port = FakeI2cPort::new();
