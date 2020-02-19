@@ -126,7 +126,7 @@ impl<I, E> BNO080<I>
         packet_len
     }
 
-    pub fn handle_one_message(&mut self, received_len: usize) {
+    pub fn handle_received_packet(&mut self, received_len: usize) {
         let msg = &self.packet_recv_buf[..received_len];
         let chan_num =  msg[2];
         //let _seq_num =  msg[3];
@@ -181,26 +181,32 @@ impl<I, E> BNO080<I>
 
     }
 
+    // return the number of messages handled
+    pub fn handle_one_message(&mut self) -> u32 {
+        let mut msg_count = 0;
+
+        let res = self.receive_packet();
+        if res.is_ok()  {
+            let received_len = res.unwrap_or(0);
+            if received_len > 0 {
+                msg_count += 1;
+                self.handle_received_packet(received_len);
+            }
+        }
+
+        msg_count
+    }
+
     /// read and parse all available messages from sensorhub queue
     pub fn handle_all_messages(&mut self) -> u32 {
         let mut msg_count = 0;
-        for _i in 0..2 {
-            let res = self.receive_packet();
-            if res.is_err() {
-                //let le_err = res.unwrap_err();
-                //panic!("no joy:  {:?}", le_err);
+
+        loop  {
+            let iter_count = self.handle_one_message();
+            if iter_count < 1 {
                 break;
             }
-            else {
-                let received_len = res.unwrap_or(0);
-                if received_len > 0 {
-                    msg_count += 1;
-                    //self.handle_one_message(received_len);
-                }
-                else {
-                    break;
-                }
-            }
+            msg_count += iter_count;
         }
 
         msg_count
@@ -815,6 +821,19 @@ mod tests {
         assert!(rc.is_ok());
         let recv_len = rc.unwrap_or(0);
         assert_eq!(recv_len, size, "wrong length");
+    }
+
+    #[test]
+    fn test_handle_one_message() {
+        let mut mock_i2c_port = FakeI2cPort::new();
+
+        //actual startup response packet
+        let raw_packet = ADVERTISING_PACKET_FULL;
+        mock_i2c_port.add_available_packet( &raw_packet);
+
+        let mut shub = BNO080::new(mock_i2c_port);
+        let msg_count = shub.handle_one_message();
+        assert_eq!(msg_count, 1, "wrong msg_count");
     }
 
     #[test]
