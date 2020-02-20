@@ -5,7 +5,7 @@ use embedded_hal::{
     blocking::delay::{ DelayMs},
 };
 
-use core::ops::{Shl, Shr};
+use core::ops::{Shr};
 
 
 const PACKET_SEND_BUF_LEN: usize = 256;
@@ -38,8 +38,6 @@ pub struct Wrapper<SI> {
     /// has the product ID been verified
     prod_id_verified: bool,
 
-    /// how many packets have we received
-    received_packet_count: u32,
 }
 
 impl<SI, SE> Wrapper<SI>
@@ -81,24 +79,24 @@ impl<SI, SE> Wrapper<SI>
         msg_count
     }
 
-    fn parse_packet_header(packet: &[u8]) -> usize {
-        const CONTINUATION_FLAG_CLEAR: u16 = !(0x80);
-        if packet.len() < PACKET_HEADER_LENGTH {
-            return 0;
-        }
-        //Bits 14:0 are used to indicate the total number of bytes in the body plus header
-        //maximum packet length is ... 32767?
-        let raw_pack_len: u16 =
-            (packet[0] as u16) + ((packet[1] as u16)
-                & CONTINUATION_FLAG_CLEAR).shl(8);
-        let packet_len: usize = raw_pack_len as usize;
-
-        //let is_continuation:bool = (packet[1] & 0x80) != 0;
-        //let chan_num =  packet[2];
-        //let seq_num =  packet[3];
-
-        packet_len
-    }
+    // fn parse_packet_header(packet: &[u8]) -> usize {
+    //     const CONTINUATION_FLAG_CLEAR: u16 = !(0x80);
+    //     if packet.len() < PACKET_HEADER_LENGTH {
+    //         return 0;
+    //     }
+    //     //Bits 14:0 are used to indicate the total number of bytes in the body plus header
+    //     //maximum packet length is ... 32767?
+    //     let raw_pack_len: u16 =
+    //         (packet[0] as u16) + ((packet[1] as u16)
+    //             & CONTINUATION_FLAG_CLEAR).shl(8);
+    //     let packet_len: usize = raw_pack_len as usize;
+    //
+    //     //let is_continuation:bool = (packet[1] & 0x80) != 0;
+    //     //let chan_num =  packet[2];
+    //     //let seq_num =  packet[3];
+    //
+    //     packet_len
+    // }
 
     fn handle_advertise_response(&mut self, received_len: usize) {
         let payload_len = received_len - PACKET_HEADER_LENGTH;
@@ -266,36 +264,26 @@ impl<SI, SE> Wrapper<SI>
     }
 
 
-    /// Read just the first header bytes of a packet
-    /// Return the total size of the packet that follows
-    fn read_unsized_packet(&mut self) -> Result<usize, WrapperError<SE>> {
-        self.packet_recv_buf[0] = 0;
-        self.packet_recv_buf[1] = 0;
-        self.sensor_interface
-            .read_packet_header(&mut self.packet_recv_buf[..PACKET_HEADER_LENGTH])
-            .map_err(WrapperError::CommError)?;
-        let packet_len = Self::parse_packet_header(&self.packet_recv_buf[..PACKET_HEADER_LENGTH]);
-        Ok(packet_len)
-    }
+    // /// Read just the first header bytes of a packet
+    // /// Return the total size of the packet that follows
+    // fn read_unsized_packet(&mut self) -> Result<usize, WrapperError<SE>> {
+    //     self.packet_recv_buf[0] = 0;
+    //     self.packet_recv_buf[1] = 0;
+    //     self.sensor_interface
+    //         .read_packet_header(&mut self.packet_recv_buf[..PACKET_HEADER_LENGTH])
+    //         .map_err(WrapperError::CommError)?;
+    //     let packet_len = Self::parse_packet_header(&self.packet_recv_buf[..PACKET_HEADER_LENGTH]);
+    //     Ok(packet_len)
+    // }
 
     /// Read one packet into the receive buffer
     fn receive_packet(&mut self) -> Result<usize, WrapperError<SE>> {
-        let packet_len:usize = self.read_unsized_packet()?;
-        if  packet_len > 0 {
-            self.received_packet_count += 1;
-        }
 
-        let received_len =
-            if packet_len > PACKET_HEADER_LENGTH {
-                self.sensor_interface
-                    .read_sized_packet(packet_len,&mut self.packet_recv_buf)
-                    .map_err(WrapperError::CommError)?
-            }
-            else {
-                packet_len
-            };
+        let packet_len = self.sensor_interface
+            .read_packet(&mut self.packet_recv_buf)
+            .map_err(WrapperError::CommError)?;
 
-        Ok(received_len)
+        Ok(packet_len)
     }
 
     fn verify_product_id(&mut self) -> Result<(), WrapperError<SE> > {

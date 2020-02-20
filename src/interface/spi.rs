@@ -6,12 +6,13 @@ use embedded_hal;
 // };
 
 use super::{SensorInterface};
-use crate::interface::PACKET_HEADER_LENGTH;
+use crate::interface::{PACKET_HEADER_LENGTH, SensorCommon};
 
 
 /// This combines the SPI peripheral and a data/command pin
 pub struct SpiInterface<SPI> {
     spi: SPI,
+    received_packet_count: usize,
 }
 
 impl<SPI, CommE> SpiInterface<SPI>
@@ -20,7 +21,7 @@ impl<SPI, CommE> SpiInterface<SPI>
         embedded_hal::blocking::spi::Transfer<u8, Error = CommE>
 {
     pub fn new(spi: SPI) -> Self {
-        Self { spi }
+        Self { spi, received_packet_count: 0 }
     }
 }
 
@@ -42,22 +43,23 @@ impl<SPI, CommE> SensorInterface for SpiInterface<SPI>
         Ok(())
     }
 
-    fn read_packet_header(&mut self, recv_buf: &mut [u8]) -> Result<(), Self::SensorError> {
-        //ensure that buffer is zeroed
+    fn read_packet(&mut self, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError> {
+        //ensure that buffer is zeroed since we're not sending any data
         for i in recv_buf.iter_mut() {
             *i = 0;
         }
-        //TODO not clear if transfer modifies the buffer sent?
-        self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]).map_err(piCommError::Spi)?;
-        Ok(())
-    }
+        //TODO might need to look at INTN pin to detect whether a packet is available
+        // get just the header
+        self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]).map_err(SpiCommError::Spi)?;
+        let packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
+        if packet_len > PACKET_HEADER_LENGTH {
+            self.spi.transfer( &mut recv_buf[PACKET_HEADER_LENGTH..packet_len]).map_err(SpiCommError::Spi)?;
+        }
 
-    fn read_sized_packet(&mut self, total_packet_len: usize, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError> {
-        //ensure that buffer is zeroed
-        for i in recv_buf.iter_mut() {
-            *i = 0;
+        if  packet_len > 0 {
+            self.received_packet_count += 1;
         }
-        self.spi.transfer( &mut recv_buf).map_err(SpiCommError::Spi)?;
-        unimplemented!()
+
+        Ok(packet_len)
     }
 }
