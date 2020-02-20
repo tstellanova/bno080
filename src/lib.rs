@@ -5,6 +5,9 @@ LICENSE: See LICENSE file
 
 #![no_std]
 
+pub mod builder;
+pub mod interface;
+pub mod wrapper;
 
 use embedded_hal::{
     blocking::delay::DelayMs,
@@ -90,17 +93,22 @@ impl<I, E> BNO080<I>
         self
     }
 
+    /// Receive and ignore one message
+    pub fn eat_one_message(&mut self) -> usize {
+        let res = self.receive_packet();
+        res.unwrap_or(0)
+    }
+
     /// Consume all available messages on the port without processing them
     pub fn eat_all_messages(&mut self,  delay: &mut dyn DelayMs<u8>) {
         loop {
-            let res = self.receive_packet();
-            let received_len = res.unwrap_or(0);
+            let received_len = self.eat_one_message();
             if received_len == 0 {
                 break;
             }
             else {
                 //give some time to other parts of the system
-                delay.delay_ms(2);
+                delay.delay_ms(1);
             }
         }
     }
@@ -222,9 +230,11 @@ impl<I, E> BNO080<I>
 
         self.soft_reset()?;
         delay.delay_ms(50);
-        self.eat_all_messages(delay);
+        self.eat_one_message();
         delay.delay_ms(50);
         self.eat_all_messages(delay);
+        // delay.delay_ms(50);
+        // self.eat_all_messages(delay);
 
         self.verify_product_id()?;
 
@@ -304,23 +314,22 @@ impl<I, E> BNO080<I>
 
     // WRITE: 0x4a 0x05 0x00 0x01 0x00 0x01
     /// Send a standard packet header followed by the body data provided
-    fn send_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<(), Error<E>> {
-        let packet_length = body_data.len() + PACKET_HEADER_LENGTH;
+    fn send_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<usize, Error<E>> {
+        let body_len = body_data.len();
+
+        self.sequence_numbers[channel as usize] += 1;
+        let packet_length = body_len + PACKET_HEADER_LENGTH;
         let packet_header = [
             (packet_length & 0xFF) as u8, //LSB
-            (packet_length >> 8) as u8, //MSB
+            packet_length.shr(8) as u8, //MSB
             channel,
             self.sequence_numbers[channel as usize]
         ];
-        self.sequence_numbers[channel as usize] += 1;
 
-        let body_len = body_data.len();
-        let total_send_len = PACKET_HEADER_LENGTH + body_len;
         self.packet_send_buf[..PACKET_HEADER_LENGTH].copy_from_slice(packet_header.as_ref());
-        self.packet_send_buf[PACKET_HEADER_LENGTH..total_send_len].copy_from_slice(body_data);
-
-        self.i2c_port.write(self.address, &self.packet_send_buf[0..total_send_len]).map_err(Error::I2c)
-
+        self.packet_send_buf[PACKET_HEADER_LENGTH..packet_length].copy_from_slice(body_data);
+        self.i2c_port.write(self.address, &self.packet_send_buf[..packet_length]).map_err(Error::I2c)?;
+        Ok(packet_length)
     }
 
     /// Read one packet into the receive buffer
@@ -376,9 +385,10 @@ impl<I, E> BNO080<I>
    pub fn soft_reset(&mut self) -> Result<(), Error<E>> {
        let data:[u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET]; //reset execute
        // send command packet and ignore received packets
-    //    self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
-    //    Ok(())
-       self.send_packet(CHANNEL_EXECUTABLE, data.as_ref())
+       self.send_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
+       //ignore the response because the size is wacky
+       self.read_unsized_packet()?;
+       Ok(())
    }
 
     /// Read just the first header bytes of a packet
@@ -389,9 +399,7 @@ impl<I, E> BNO080<I>
         self.i2c_port.read(self.address, &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH]).map_err(Error::I2c)?;
         let packet_len = Self::parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
         Ok(packet_len)
-        
     }
-
 
 
     /// Read the remainder of the packet after the packet header, if any
@@ -521,6 +529,7 @@ mod tests {
 
     //divides up packets into segments
     struct FakePacket {
+        pub addr: u8,
         pub len: usize,
         pub buf: [u8; MAX_FAKE_PACKET_SIZE],
     }
@@ -529,6 +538,7 @@ mod tests {
         pub fn new_from_slice(slice: &[u8]) -> Self {
             let src_len = slice.len();
             let mut inst = Self {
+                addr: 0,
                 len: src_len,
                 buf: [0; MAX_FAKE_PACKET_SIZE],
             };
@@ -539,12 +549,14 @@ mod tests {
 
     struct FakeI2cPort {
         pub available_packets: VecDeque<FakePacket>,
+        pub sent_packets: VecDeque<FakePacket>,
     }
 
     impl FakeI2cPort {
         fn new() -> Self {
             FakeI2cPort {
                 available_packets: VecDeque::with_capacity(3),
+                sent_packets: VecDeque::with_capacity(3),
             }
         }
 
@@ -559,9 +571,10 @@ mod tests {
     impl Read for FakeI2cPort {
         type Error = ();
 
-        fn read(&mut self, _address: u8, buffer: &mut [u8]) -> Result<(), Self::Error> {
+        fn read(&mut self, addr: u8, buffer: &mut [u8]) -> Result<(), Self::Error> {
             let next_pack = self.available_packets.pop_front().unwrap_or(
                 FakePacket {
+                    addr: addr,
                     len: 0,
                     buf: [0; MAX_FAKE_PACKET_SIZE],
                 }
@@ -581,6 +594,7 @@ mod tests {
                 buffer[..read_len].copy_from_slice(&next_pack.buf[..read_len]);
                 let remainder_len = src_len - read_len;
                 let mut remainder_packet = FakePacket {
+                    addr: addr,
                     len: remainder_len + 4,
                     buf: [0; MAX_FAKE_PACKET_SIZE],
                 };
@@ -607,6 +621,8 @@ mod tests {
         type Error = ();
 
         fn write(&mut self, _addr: u8, _bytes: &[u8]) -> Result<(), Self::Error> {
+            let sent_pack = FakePacket::new_from_slice(_bytes);
+            self.sent_packets.push_back(sent_pack);
             Ok(())
         }
     }
@@ -614,7 +630,9 @@ mod tests {
     impl WriteRead for FakeI2cPort {
         type Error = ();
 
-        fn write_read(&mut self, _addr: u8, _bytes: &[u8], _buffer: &mut [u8]) -> Result<(), Self::Error> {
+        fn write_read(&mut self, address: u8, send_buf: &[u8], recv_buf: &mut [u8]) -> Result<(), Self::Error> {
+            self.write(address, send_buf)?;
+            self.read(address, recv_buf)?;
             Ok(())
         }
     }
@@ -692,6 +710,18 @@ mod tests {
         assert!(rc.is_ok());
         let next_packet_size = rc.unwrap_or(0);
         assert_eq!(next_packet_size, 276, "wrong length");
+    }
+
+    #[test]
+    fn test_send_reset() {
+        let mut mock_i2c_port = FakeI2cPort::new();
+
+        let mut shub = BNO080::new(mock_i2c_port);
+        let rc = shub.soft_reset();
+        let sent_pack = shub.i2c_port.sent_packets.pop_front().unwrap();
+
+        assert_eq!(sent_pack.len, 5);
+
     }
 
 //    #[test]
