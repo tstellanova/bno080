@@ -25,7 +25,7 @@ pub enum WrapperError<E> {
 }
 
 pub struct Wrapper<SI> {
-    sensor_interface: SI,
+    pub(crate) sensor_interface: SI,
     /// each communication channel with the device has its own sequence number
     sequence_numbers: [u8; NUM_CHANNELS],
     /// buffer for building and sending packet to the sensor hub
@@ -259,7 +259,7 @@ impl<SI, SE> Wrapper<SI>
     }
 
     /// Read one packet into the receive buffer
-    fn receive_packet(&mut self) -> Result<usize, WrapperError<SE>> {
+    pub fn receive_packet(&mut self) -> Result<usize, WrapperError<SE>> {
 
         let packet_len = self.sensor_interface
             .read_packet(&mut self.packet_recv_buf)
@@ -352,33 +352,7 @@ mod tests {
     use crate::interface::I2cInterface;
     use crate::interface::i2c::DEFAULT_ADDRESS;
 
-    #[test]
-    fn test_receive_unsized() {
-        let mut mock_i2c_port = FakeI2cPort::new();
 
-        let packet  = ADVERTISING_PACKET_FIRST_HEADER;
-        mock_i2c_port.add_available_packet( &packet);
-
-        let mut shub = Wrapper::new_with_interface(
-            I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
-
-        let rc = shub.receive_packet();
-        assert!(rc.is_ok());
-        let next_packet_size = rc.unwrap_or(0);
-        assert_eq!(next_packet_size, 276, "wrong length");
-    }
-
-    //TODO give access to sent packets for testing porpoises
-    // #[test]
-    // fn test_send_reset() {
-    //     let mut mock_i2c_port = FakeI2cPort::new();
-    //     let mut shub = Wrapper::new_with_interface(
-    //         I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
-    //     let rc = shub.soft_reset();
-    //     let sent_pack = shub.sensor_interface.sent_packets.pop_front().unwrap();
-    //     assert_eq!(sent_pack.len, 5);
-    //
-    // }
 
 //    #[test]
 //    fn test_receive_unsized_under() {
@@ -392,60 +366,31 @@ mod tests {
 //        assert!(rc.is_err());
 //    }
 
+    // //TODO give access to sent packets for testing porpoises
+    // #[test]
+    // fn test_send_reset() {
+    //     let mut mock_i2c_port = FakeI2cPort::new();
+    //     let mut shub = Wrapper::new_with_interface(
+    //         I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
+    //     let rc = shub.soft_reset();
+    //     let sent_pack = shub.sensor_interface.sent_packets.pop_front().unwrap();
+    //     assert_eq!(sent_pack.len, 5);
+    // }
 
     pub const MIDPACK: [u8; 52] = [
-        0x34,
-        0x80,
-        0x02,
-        0x7B,
-        0xF8,
-        0x00,
-        0x01,
-        0x02,
-        0x96,
-        0xA4,
-        0x98,
-        0x00,
-        0xE6,
-        0x00,
-        0x00,
-        0x00,
-        0x04,
-        0x00,
-        0x00,
-        0x00,
-        0xF8,
-        0x00,
-        0x04,
-        0x04,
-        0x36,
-        0xA3,
-        0x98,
-        0x00,
-        0x95,
-        0x01,
-        0x00,
-        0x00,
-        0x02,
-        0x00,
-        0x00,
-        0x00,
-        0xF8,
-        0x00,
-        0x04,
-        0x02,
-        0xE3,
-        0xA2,
-        0x98,
-        0x00,
-        0xD9,
-        0x01,
-        0x00,
-        0x00,
-        0x07,
-        0x00,
-        0x00,
-        0x00,
+        0x34, 0x00, 0x02, 0x7B,
+        0xF8, 0x00, 0x01, 0x02,
+        0x96, 0xA4, 0x98, 0x00,
+        0xE6, 0x00, 0x00, 0x00,
+        0x04, 0x00, 0x00, 0x00,
+        0xF8, 0x00, 0x04, 0x04,
+        0x36, 0xA3, 0x98, 0x00,
+        0x95, 0x01, 0x00, 0x00,
+        0x02, 0x00, 0x00, 0x00,
+        0xF8, 0x00, 0x04, 0x02,
+        0xE3, 0xA2, 0x98, 0x00,
+        0xD9, 0x01, 0x00, 0x00,
+        0x07, 0x00, 0x00, 0x00,
     ];
 
     #[test]
@@ -461,50 +406,6 @@ mod tests {
         assert!(rc.is_ok());
     }
 
-    #[test]
-    fn test_read_unsized_large() {
-        let mut mock_i2c_port = FakeI2cPort::new();
-
-        let packet  = ADVERTISING_PACKET_FULL;
-        mock_i2c_port.add_available_packet( &packet);
-
-        let mut shub = Wrapper::new_with_interface(
-            I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
-        let rc = shub.receive_packet();
-        assert!(rc.is_ok());
-        let next_packet_size = rc.unwrap_or(0);
-        assert_eq!(next_packet_size, 276, "wrong length");
-    }
-
-    #[test]
-    fn test_receive_packet_large() {
-        let mut mock_i2c_port = FakeI2cPort::new();
-
-        let packet  = ADVERTISING_PACKET_FULL;
-        mock_i2c_port.add_available_packet( &packet);
-
-        let mut shub = Wrapper::new_with_interface(
-            I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
-        let rc = shub.receive_packet();
-        assert!(rc.is_ok());
-        let next_packet_size = rc.unwrap_or(0);
-        assert_eq!(next_packet_size, 276, "wrong length");
-    }
-
-    #[test]
-    fn test_handle_one_message() {
-        let mut mock_i2c_port = FakeI2cPort::new();
-
-        //actual startup response packet
-        let raw_packet = ADVERTISING_PACKET_FULL;
-        mock_i2c_port.add_available_packet( &raw_packet);
-
-        let mut shub = Wrapper::new_with_interface(
-            I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
-
-        let msg_count = shub.handle_one_message();
-        assert_eq!(msg_count, 1, "wrong msg_count");
-    }
 
     #[test]
     fn test_handle_adv_message() {
@@ -537,6 +438,5 @@ mod tests {
         0x21, 0x00, 0x22, 0x00, 0x23, 0x00, 0x24, 0x00, 0x25, 0x00, 0x26, 0x00, 0x27, 0x00, 0x28, 0x0e, 0x29, 0x0c, 0x2a, 0x0e
     ];
 
-    pub const ADVERTISING_PACKET_FIRST_HEADER: [u8; 4] = [0x14, 0x01, 0x00, 0x00];
 
 }

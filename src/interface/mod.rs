@@ -61,7 +61,6 @@ impl SensorCommon {
 
 #[cfg(test)]
 mod tests {
-    use crate::interface::SensorCommon;
     use super::*;
     use core::ops::{Shr};
 
