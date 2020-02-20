@@ -48,7 +48,7 @@ impl<SPI, CommE> SensorInterface for SpiInterface<SPI>
             *i = 0;
         }
         //TODO not clear if transfer modifies the buffer sent?
-        self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]).map_err(piCommError::Spi)?;
+        self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]).map_err(SpiCommError::Spi)?;
         Ok(())
     }
 
@@ -57,7 +57,7 @@ impl<SPI, CommE> SensorInterface for SpiInterface<SPI>
         for i in recv_buf.iter_mut() {
             *i = 0;
         }
-        self.spi.transfer( &mut recv_buf).map_err(SpiCommError::Spi)?;
-        unimplemented!()
+        let recvd_words = self.spi.transfer( &mut recv_buf[..total_packet_len]).map_err(SpiCommError::Spi)?;
+        Ok(recvd_words.len())
     }
 }
