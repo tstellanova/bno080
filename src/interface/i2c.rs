@@ -107,8 +107,17 @@ impl<I2C, CommE> SensorInterface for I2cInterface<I2C>
 {
     type SensorError = Error<CommE, ()>;
 
-    fn setup(&mut self, _delay_source: Option<&mut impl DelayMs<u8>>) -> Result<(), Self::SensorError> {
+    fn setup(&mut self, _delay_source: &mut impl DelayMs<u8>) -> Result<(), Self::SensorError> {
        Ok(())
+    }
+
+    fn wait_for_data_available(&mut self, _max_ms: u8, _delay_source: &mut impl DelayMs<u8>) -> bool {
+        let rc = self.read_packet_header();
+        if rc.is_err() {
+            return false;
+        }
+        let packet_len = SensorCommon::parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
+        packet_len > 0
     }
 
     fn send_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {

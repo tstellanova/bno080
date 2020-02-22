@@ -22,6 +22,9 @@ pub enum WrapperError<E> {
     InvalidChipId(u8),
     /// Unsupported sensor firmware version
     InvalidFWVersion(u8),
+
+    /// We expected some data but didn't receive any
+    NoDataAvailable,
 }
 
 pub struct BNO080<SI> {
@@ -192,16 +195,16 @@ impl<SI, SE> BNO080<SI>
         //Section 5.1.1.1 : On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
 
-        self.sensor_interface.setup( Some(delay_source)).map_err(WrapperError::CommError)?;
+        self.sensor_interface.setup( delay_source).map_err(WrapperError::CommError)?;
         self.soft_reset()?;
         delay_source.delay_ms(50);
         self.eat_one_message();
         delay_source.delay_ms(50);
         self.eat_all_messages(delay_source);
-        // delay.delay_ms(50);
-        // self.eat_all_messages(delay);
+        delay_source.delay_ms(50);
+        self.eat_all_messages(delay_source);
 
-        self.verify_product_id()?;
+        self.verify_product_id(delay_source)?;
 
         Ok(())
     }
@@ -240,7 +243,8 @@ impl<SI, SE> BNO080<SI>
         Ok(())
     }
 
-    fn send_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<usize, WrapperError<SE>> {
+    /// Prepare a packet for sending, in our send buffer
+    fn prep_send_packet(&mut self, channel: u8, body_data: &[u8]) -> usize {
         let body_len = body_data.len();
 
         self.sequence_numbers[channel as usize] += 1;
@@ -254,6 +258,12 @@ impl<SI, SE> BNO080<SI>
 
         self.packet_send_buf[..PACKET_HEADER_LENGTH].copy_from_slice(packet_header.as_ref());
         self.packet_send_buf[PACKET_HEADER_LENGTH..packet_length].copy_from_slice(body_data);
+
+        packet_length
+    }
+
+    fn send_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<usize, WrapperError<SE>> {
+        let packet_length = self.prep_send_packet(channel, body_data);
         self.sensor_interface
             .send_packet( &self.packet_send_buf[..packet_length])
             .map_err(WrapperError::CommError)?;
@@ -272,13 +282,13 @@ impl<SI, SE> BNO080<SI>
         Ok(packet_len)
     }
 
-    fn verify_product_id(&mut self) -> Result<(), WrapperError<SE> > {
+    fn verify_product_id(&mut self, delay_source: &mut impl DelayMs<u8>) -> Result<(), WrapperError<SE> > {
         let cmd_body: [u8; 2] = [
             SENSORHUB_PROD_ID_REQ, //request product ID
             0, //reserved
         ];
 
-        let recv_len = self.send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
+        let recv_len = self.send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref(), delay_source)?;
 
         //verify the response
         if recv_len > PACKET_HEADER_LENGTH {
@@ -288,9 +298,10 @@ impl<SI, SE> BNO080<SI>
                 self.prod_id_verified = true;
                 return Ok(())
             }
+            return Err(WrapperError::InvalidChipId(report_id));
         }
-
-        return Err(WrapperError::InvalidChipId(0));
+      
+        return Err(WrapperError::NoDataAvailable)
     }
 
     pub fn soft_reset(&mut self) -> Result<(), WrapperError<SE>> {
@@ -301,10 +312,12 @@ impl<SI, SE> BNO080<SI>
     }
 
     /// Send a packet and receive the response
-    fn send_and_receive_packet(&mut self, channel: u8, body_data: &[u8]) ->  Result<usize, WrapperError<SE>> {
-        //TODO reimplement with WriteRead once that interface is stable
+    fn send_and_receive_packet(&mut self, channel: u8, body_data: &[u8],  delay_source: &mut impl DelayMs<u8>) ->  Result<usize, WrapperError<SE>> {
         self.send_packet(channel, body_data)?;
-        self.receive_packet()
+        if self.sensor_interface.wait_for_data_available(250, delay_source) {
+            return self.receive_packet()
+        }
+        Err(WrapperError::NoDataAvailable)
     }
 }
 

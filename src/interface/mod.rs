@@ -14,7 +14,7 @@ pub trait SensorInterface {
     type SensorError;
 
     /// give the sensor interface a chance to set up
-    fn setup(&mut self, delay_source: Option<&mut impl DelayMs<u8>> ) -> Result<(), Self::SensorError>;
+    fn setup(&mut self, delay_source: &mut impl DelayMs<u8> ) -> Result<(), Self::SensorError>;
 
     /// Send the whole packet provided
     fn send_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError>;
@@ -25,6 +25,8 @@ pub trait SensorInterface {
 
     // Send a packet and receive the response immediately
     //fn send_and_receive_packet(&mut self, send_buf: &[u8], recv_buf: &mut [u8]) -> Result<usize, CommBusError>;
+
+    fn wait_for_data_available(&mut self, max_ms: u8, delay_source: &mut impl DelayMs<u8>) -> bool;
 }
 
 pub use self::i2c::I2cInterface;

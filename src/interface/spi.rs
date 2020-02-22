@@ -42,8 +42,14 @@ impl<SPI, CS, IN, WN, RS, CommE, PinE> SpiInterface<SPI, CS, IN, WN, RS>
         }
     }
 
-    fn data_available(&self) ->  bool  {
+
+    fn sensor_ready(&self) ->  bool  {
         self.hintn.is_low().unwrap_or(false)
+    }
+
+    /// return true when the sensor is ready
+    fn wait_for_ready(&mut self, delay_source: &mut impl DelayMs<u8>) -> bool {
+        self.wait_for_data_available(200, delay_source)
     }
 }
 
@@ -58,20 +64,35 @@ impl<SPI, CS, IN, WN, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, CS,
 {
     type SensorError = Error<CommE, PinE>;
 
-    fn setup(&mut self, delay_source: Option<&mut impl DelayMs<u8>>) -> Result<(), Self::SensorError> {
+    fn setup(&mut self, delay_source: &mut impl DelayMs<u8>) -> Result<(), Self::SensorError> {
         self.waken.set_high().map_err(Error::Pin)?;
         self.reset.set_low().map_err(Error::Pin)?;
-        if delay_source.is_some() {
-            //TODO delay a couple ms
-            delay_source.unwrap().delay_ms(2);
-        }
+        delay_source.delay_ms(2);
+
         self.reset.set_high().map_err(Error::Pin)?;
-        //TODO allow WAKEN to fall low?
+
+        if self.wait_for_ready(delay_source) {
+            self.waken.set_low().map_err(Error::Pin)?;
+            return Ok(())
+        }
+
+        //TODO error condition
         Ok(())
     }
 
+    fn wait_for_data_available(&mut self, max_ms: u8, delay_source: &mut impl DelayMs<u8>) -> bool {
+        for _i in 0..max_ms {
+            delay_source.delay_ms(1);
+            if self.sensor_ready() {
+                return true;
+            }
+        }
+
+        false
+    }
+
     fn send_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
-        //self.waken.set_low().map_err(Error::Pin)?;
+        self.waken.set_low().map_err(Error::Pin)?;
         self.cs.set_low().map_err(Error::Pin)?;
 
         self.spi.write(&packet).map_err(Error::Comm)?;
@@ -80,9 +101,9 @@ impl<SPI, CS, IN, WN, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, CS,
     }
 
     fn read_packet(&mut self, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError> {
-        //self.waken.set_low().map_err(Error::Pin)?;
+        self.waken.set_low().map_err(Error::Pin)?;
 
-        if !self.data_available() {
+        if !self.sensor_ready() {
             return Ok(0)
         }
 
@@ -113,3 +134,5 @@ impl<SPI, CS, IN, WN, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, CS,
         Ok(packet_len)
     }
 }
+
+
