@@ -1,6 +1,7 @@
 
 use super::{SensorInterface, SensorCommon, PACKET_HEADER_LENGTH};
 use crate::Error;
+use embedded_hal::blocking::delay::DelayMs;
 
 /// the i2c address normally used by BNO080
 pub const DEFAULT_ADDRESS: u8 =  0x4A;
@@ -106,7 +107,7 @@ impl<I2C, CommE> SensorInterface for I2cInterface<I2C>
 {
     type SensorError = Error<CommE, ()>;
 
-    fn setup(&mut self) -> Result<(), Self::SensorError> {
+    fn setup(&mut self, _delay_source: Option<&mut impl DelayMs<u8>>) -> Result<(), Self::SensorError> {
        Ok(())
     }
 

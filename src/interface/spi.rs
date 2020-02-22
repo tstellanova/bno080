@@ -8,32 +8,36 @@ use embedded_hal;
 use super::{SensorInterface};
 use crate::interface::{PACKET_HEADER_LENGTH, SensorCommon};
 use embedded_hal::digital::v2::{OutputPin, InputPin};
+use embedded_hal::blocking::delay::DelayMs;
+
 use crate::Error;
 
-
 /// This combines the SPI peripheral and a data/command pin
-pub struct SpiInterface<SPI, CS, IN, WN> {
+pub struct SpiInterface<SPI, CS, IN, WN, RS> {
     spi: SPI,
     cs: CS,
     hintn: IN,
     waken: WN,
+    reset: RS,
     received_packet_count: usize,
 }
 
-impl<SPI, CS, IN, WN, CommE, PinE> SpiInterface<SPI, CS, IN, WN>
+impl<SPI, CS, IN, WN, RS, CommE, PinE> SpiInterface<SPI, CS, IN, WN, RS>
     where
         SPI: embedded_hal::blocking::spi::Write<u8, Error = CommE> +
         embedded_hal::blocking::spi::Transfer<u8, Error = CommE>,
         CS: OutputPin<Error = PinE>,
         IN: InputPin<Error = PinE>,
-        WN: OutputPin<Error = PinE>
+        WN: OutputPin<Error = PinE>,
+        RS: OutputPin<Error = PinE>,
 {
-    pub fn new(spi: SPI, cs: CS, hintn: IN, waken: WN) -> Self {
+    pub fn new(spi: SPI, cs: CS, hintn: IN, waken: WN, reset: RS) -> Self {
         Self {
             spi,
             cs,
             hintn,
             waken,
+            reset,
             received_packet_count: 0
         }
     }
@@ -43,18 +47,26 @@ impl<SPI, CS, IN, WN, CommE, PinE> SpiInterface<SPI, CS, IN, WN>
     }
 }
 
-impl<SPI, CS, IN, WN, CommE, PinE> SensorInterface for SpiInterface<SPI, CS, IN, WN>
+impl<SPI, CS, IN, WN, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, CS, IN, WN, RS>
     where
         SPI: embedded_hal::blocking::spi::Write<u8, Error = CommE> +
         embedded_hal::blocking::spi::Transfer<u8, Error = CommE>,
         CS: OutputPin<Error = PinE>,
         IN: InputPin<Error = PinE>,
-        WN: OutputPin<Error = PinE>
+        WN: OutputPin<Error = PinE>,
+        RS: OutputPin<Error = PinE>,
 {
     type SensorError = Error<CommE, PinE>;
 
-    fn setup(&mut self) -> Result<(), Self::SensorError> {
+    fn setup(&mut self, delay_source: Option<&mut impl DelayMs<u8>>) -> Result<(), Self::SensorError> {
         self.waken.set_high().map_err(Error::Pin)?;
+        self.reset.set_low().map_err(Error::Pin)?;
+        if delay_source.is_some() {
+            //TODO delay a couple ms
+            delay_source.unwrap().delay_ms(2);
+        }
+        self.reset.set_high().map_err(Error::Pin)?;
+        //TODO allow WAKEN to fall low?
         Ok(())
     }
 
@@ -84,12 +96,13 @@ impl<SPI, CS, IN, WN, CommE, PinE> SensorInterface for SpiInterface<SPI, CS, IN,
         // get just the header
         self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]).map_err(Error::Comm)?;
         let mut packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
-        if packet_len > 300 {
-            // equivalent of 0xFFFF is garbage
-            packet_len = 0;
-        }
         if packet_len > PACKET_HEADER_LENGTH {
-            self.spi.transfer( &mut recv_buf[PACKET_HEADER_LENGTH..packet_len]).map_err(Error::Comm)?;
+            if packet_len < recv_buf.len() {
+                self.spi.transfer( &mut recv_buf[PACKET_HEADER_LENGTH..packet_len]).map_err(Error::Comm)?;
+            }
+            else {
+                packet_len = 0;
+            }
         }
 
         if  packet_len > 0 {

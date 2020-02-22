@@ -9,7 +9,7 @@ use core::ops::{Shr};
 
 
 const PACKET_SEND_BUF_LEN: usize = 256;
-const PACKET_RECV_BUF_LEN: usize = 512;
+const PACKET_RECV_BUF_LEN: usize = 1024;
 
 const NUM_CHANNELS: usize = 6;
 
@@ -188,15 +188,16 @@ impl<SI, SE> BNO080<SI>
 
     /// The BNO080 starts up with all sensors disabled,
     /// waiting for the application to configure it.
-    pub fn init(&mut self, delay: &mut dyn DelayMs<u8>) -> Result<(), WrapperError<SE>> {
+    pub fn init(&mut self, delay_source: &mut impl DelayMs<u8>) -> Result<(), WrapperError<SE>> {
         //Section 5.1.1.1 : On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
 
+        self.sensor_interface.setup( Some(delay_source)).map_err(WrapperError::CommError)?;
         self.soft_reset()?;
-        delay.delay_ms(50);
+        delay_source.delay_ms(50);
         self.eat_one_message();
-        delay.delay_ms(50);
-        self.eat_all_messages(delay);
+        delay_source.delay_ms(50);
+        self.eat_all_messages(delay_source);
         // delay.delay_ms(50);
         // self.eat_all_messages(delay);
 

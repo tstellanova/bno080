@@ -6,7 +6,7 @@ pub mod mock_i2c_port;
 
 use core::ops::{Shl};
 
-
+use embedded_hal::blocking::delay::DelayMs;
 
 /// A method of communicating with the sensor
 pub trait SensorInterface {
@@ -14,7 +14,7 @@ pub trait SensorInterface {
     type SensorError;
 
     /// give the sensor interface a chance to set up
-    fn setup(&mut self) -> Result<(), Self::SensorError>;
+    fn setup(&mut self, delay_source: Option<&mut impl DelayMs<u8>> ) -> Result<(), Self::SensorError>;
 
     /// Send the whole packet provided
     fn send_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError>;
