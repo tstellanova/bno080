@@ -196,13 +196,13 @@ impl<SI, SE> BNO080<SI>
         // its full advertisement response, unsolicited, to the host.
 
         self.sensor_interface.setup( delay_source).map_err(WrapperError::CommError)?;
-        self.soft_reset()?;
-        delay_source.delay_ms(50);
-        self.eat_one_message();
-        delay_source.delay_ms(50);
-        self.eat_all_messages(delay_source);
+        //self.soft_reset()?;
+        //delay_source.delay_ms(50);
+        //self.eat_one_message();
         delay_source.delay_ms(50);
         self.eat_all_messages(delay_source);
+        // delay_source.delay_ms(50);
+        // self.eat_all_messages(delay_source);
 
         self.verify_product_id(delay_source)?;
 

@@ -16,6 +16,9 @@ pub enum Error<CommE, PinE>
     Comm(CommE),
     /// Pin setting error
     Pin(PinE),
+
+    /// The sensor is not responding
+    SensorUnresponsive,
 }
 
 
