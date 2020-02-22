@@ -24,7 +24,7 @@ pub enum WrapperError<E> {
     InvalidFWVersion(u8),
 }
 
-pub struct Wrapper<SI> {
+pub struct BNO080<SI> {
     pub(crate) sensor_interface: SI,
     /// each communication channel with the device has its own sequence number
     sequence_numbers: [u8; NUM_CHANNELS],
@@ -41,7 +41,8 @@ pub struct Wrapper<SI> {
 }
 
 
-impl<SI> Wrapper<SI> {
+impl<SI> BNO080<SI> {
+
     pub fn new_with_interface(sensor_interface: SI) -> Self {
         Self {
             sensor_interface,
@@ -54,7 +55,7 @@ impl<SI> Wrapper<SI> {
     }
 }
 
-impl<SI, SE> Wrapper<SI>
+impl<SI, SE> BNO080<SI>
     where
         SI: SensorInterface<SensorError = SE>,
 {
@@ -260,7 +261,9 @@ impl<SI, SE> Wrapper<SI>
 
     /// Read one packet into the receive buffer
     pub fn receive_packet(&mut self) -> Result<usize, WrapperError<SE>> {
-
+        self.packet_recv_buf[0] = 0;
+        self.packet_recv_buf[1] = 0;
+        
         let packet_len = self.sensor_interface
             .read_packet(&mut self.packet_recv_buf)
             .map_err(WrapperError::CommError)?;
@@ -346,7 +349,7 @@ const SH2_STARTUP_INIT_UNSOLICITED:u8 = SH2_CMD_INITIALIZE | SH2_INIT_UNSOLICITE
 #[cfg(test)]
 mod tests {
     use crate::interface::mock_i2c_port::FakeI2cPort;
-    use super::Wrapper;
+    use super::BNO080;
     //use super::*;
 
     use crate::interface::I2cInterface;
@@ -400,7 +403,7 @@ mod tests {
         let packet = MIDPACK;
         mock_i2c_port.add_available_packet( &packet);
 
-        let mut shub = Wrapper::new_with_interface(
+        let mut shub = BNO080::new_with_interface(
             I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
         let rc = shub.receive_packet();
         assert!(rc.is_ok());
@@ -415,7 +418,7 @@ mod tests {
         let raw_packet = ADVERTISING_PACKET_FULL;
         mock_i2c_port.add_available_packet( &raw_packet);
 
-        let mut shub = Wrapper::new_with_interface(
+        let mut shub = BNO080::new_with_interface(
             I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
 
         let msg_count = shub.handle_one_message();

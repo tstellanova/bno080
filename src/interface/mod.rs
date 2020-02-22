@@ -13,6 +13,9 @@ pub trait SensorInterface {
     /// Interface error type
     type SensorError;
 
+    /// give the sensor interface a chance to set up
+    fn setup(&mut self) -> Result<(), Self::SensorError>;
+
     /// Send the whole packet provided
     fn send_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError>;
 
