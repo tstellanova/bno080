@@ -1,11 +1,12 @@
 use crate::interface::{
+    DebugFunc,
     SensorInterface,
     PACKET_HEADER_LENGTH};
 use embedded_hal::{
     blocking::delay::{ DelayMs},
 };
 
-use core::ops::{Shr};
+use core::ops::{Shl, Shr};
 
 
 const PACKET_SEND_BUF_LEN: usize = 256;
@@ -36,6 +37,7 @@ pub struct BNO080<SI> {
     /// buffer for building packets received from the sensor hub
     packet_recv_buf: [u8; PACKET_RECV_BUF_LEN],
 
+    debug_func: Option<DebugFunc>,
     last_packet_len_received: usize,
     /// has the device been succesfully reset
     device_reset: bool,
@@ -67,6 +69,7 @@ impl<SI> BNO080<SI> {
             sequence_numbers: [0; NUM_CHANNELS],
             packet_send_buf: [0; PACKET_SEND_BUF_LEN],
             packet_recv_buf: [0; PACKET_RECV_BUF_LEN],
+            debug_func: None,
             last_packet_len_received: 0,
             device_reset: false,
             prod_id_verified: false,
@@ -255,17 +258,24 @@ impl<SI, SE> BNO080<SI>
 
         self.sensor_interface.setup( delay_source).map_err(WrapperError::CommError)?;
         //self.soft_reset()?;
-        // delay_source.delay_ms(50);
-        // self.eat_one_message();
-        delay_source.delay_ms(50);
-        self.handle_all_messages(delay_source);
+        self.sensor_interface.wait_for_data_available(150, delay_source);
+        self.handle_one_message();// handle advert
+        self.sensor_interface.wait_for_data_available(150, delay_source);
+        self.handle_one_message(); // handle unsolicited unitialize response
+
+        //self.handle_all_messages(delay_source);
         //self.eat_all_messages(delay_source);
-        delay_source.delay_ms(50);
-        self.handle_all_messages(delay_source);
+        //delay_source.delay_ms(50);
+        //self.handle_all_messages(delay_source);
         
         self.verify_product_id(delay_source)?;
 
         Ok(())
+    }
+
+
+    pub fn enable_debugging(&mut self, dbf: DebugFunc) {
+        self.debug_func = Some(dbf);
     }
 
     /// Tell the sensor to start reporting the fused rotation vector
@@ -339,6 +349,17 @@ impl<SI, SE> BNO080<SI>
             .map_err(WrapperError::CommError)?;
 
         self.last_packet_len_received = packet_len;
+
+
+        if self.debug_func.is_some() {
+            let blob: u32 =
+                (self.packet_recv_buf[0] as u32).shl(24)
+                + (self.packet_recv_buf[1] as u32).shl(16)
+                + (self.packet_recv_buf[2] as u32).shl(8)
+                + (self.packet_recv_buf[3] as u32);
+            self.debug_func.unwrap()(blob as usize);
+        }
+
         Ok(packet_len)
     }
 
@@ -369,11 +390,18 @@ impl<SI, SE> BNO080<SI>
 
     /// Send a packet and receive the response
     fn send_and_receive_packet(&mut self, channel: u8, body_data: &[u8], delay_source: &mut impl DelayMs<u8>) ->  Result<usize, WrapperError<SE>> {
-        let send_packet_length = self.prep_send_packet(channel, body_data);
-        let recv_packet_length = self.sensor_interface.send_and_receive_packet(
-            &self.packet_send_buf[..send_packet_length].as_ref(),
-            &mut self.packet_recv_buf,
-            delay_source).map_err(WrapperError::CommError)?;
+        if !self.sensor_interface.wait_for_data_available(150, delay_source) {
+            self.debug_func.unwrap()(666);
+        }
+        self.send_packet(channel, &body_data)?;
+        self.sensor_interface.wait_for_data_available(150, delay_source);
+        let recv_packet_length = self.sensor_interface.read_packet(&mut self.packet_recv_buf).map_err(WrapperError::CommError)?;
+
+        //let send_packet_length = self.prep_send_packet(channel, body_data);
+        // let recv_packet_length = self.sensor_interface.send_and_receive_packet(
+        //     &self.packet_send_buf[..send_packet_length].as_ref(),
+        //     &mut self.packet_recv_buf,
+        //     delay_source).map_err(WrapperError::CommError)?;
         Ok(recv_packet_length)
     }
 }

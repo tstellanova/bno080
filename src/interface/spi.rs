@@ -3,7 +3,7 @@
 use embedded_hal;
 
 use super::{SensorInterface};
-use crate::interface::{PACKET_HEADER_LENGTH, SensorCommon};
+use crate::interface::{PACKET_HEADER_LENGTH, SensorCommon, DebugFunc};
 use embedded_hal::digital::v2::{OutputPin, InputPin};
 use embedded_hal::blocking::delay::DelayMs;
 
@@ -21,6 +21,7 @@ pub struct SpiInterface<SPI, CSN, IN, WAK, RSTN> {
     waken: WAK,
     reset: RSTN,
     received_packet_count: usize,
+    debug_func: Option<DebugFunc>,
 }
 
 impl<SPI, CSN, IN, WAK, RSTN, CommE, PinE> SpiInterface<SPI, CSN, IN, WAK, RSTN>
@@ -39,7 +40,8 @@ impl<SPI, CSN, IN, WAK, RSTN, CommE, PinE> SpiInterface<SPI, CSN, IN, WAK, RSTN>
             hintn,
             waken,
             reset,
-            received_packet_count: 0
+            received_packet_count: 0,
+            debug_func: None,
         }
     }
 
@@ -47,13 +49,14 @@ impl<SPI, CSN, IN, WAK, RSTN, CommE, PinE> SpiInterface<SPI, CSN, IN, WAK, RSTN>
         self.hintn.is_low().unwrap_or(false)
     }
 
-    /// return true when the sensor is ready
-    fn wait_for_ready(&mut self, delay_source: &mut impl DelayMs<u8>) -> bool {
+    /// Wait for sensor to be ready.
+    /// After reset this can take around 120 ms
+    fn wait_for_sensor_ready(&mut self, delay_source: &mut impl DelayMs<u8>) -> bool {
         self.wait_for_data_available(250, delay_source)
     }
 
-    /// read the body ("cargo") of a packet,
-    /// return the total packet length read
+/// read the body ("cargo") of a packet,
+/// return the total packet length read
     fn read_packet_cargo(&mut self, recv_buf: &mut [u8]) -> usize  {
         let mut packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
         // now get the body
@@ -87,29 +90,28 @@ impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, C
     type SensorError = Error<CommE, PinE>;
 
     fn setup(&mut self, delay_source: &mut impl DelayMs<u8>) -> Result<(), Self::SensorError> {
+        // Deselect sensor
         self.csn.set_high().map_err(Error::Pin)?;
+        // Set WAK / PS0 to high before we reset, in order to select SPI (vs UART) mode
         self.waken.set_high().map_err(Error::Pin)?;
-        // reset cycle
+        // begin reset cycle
         self.reset.set_low().map_err(Error::Pin)?;
         delay_source.delay_ms(5);
         self.reset.set_high().map_err(Error::Pin)?;
 
-        if self.wait_for_ready(delay_source) {
-            // TODO do we need to ever drop this low? or assume the sensor stays awake?
-            //self.waken.set_low().map_err(Error::Pin)?;
-            
-            return Ok(())
-        }
+        self.wait_for_sensor_ready(delay_source);
 
-        Err(Error::SensorUnresponsive)
+        Ok(())
+        //Err(Error::SensorUnresponsive)
     }
 
+    /// return true if the sensor is ready to provide data
     fn wait_for_data_available(&mut self, max_ms: u8, delay_source: &mut impl DelayMs<u8>) -> bool {
         for _i in 0..max_ms {
-            delay_source.delay_ms(1);
             if self.sensor_ready() {
                 return true;
             }
+            delay_source.delay_ms(1);
         }
         false
     }
@@ -159,6 +161,12 @@ impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, C
 
     }
 
+
+    fn enable_debugging(&mut self, dbf: DebugFunc) {
+        self.debug_func = Some(dbf);
+    }
+
+
     fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
         self.csn.set_low().map_err(Error::Pin)?;
         let rc = self.spi.write(&packet).map_err(Error::Comm);
@@ -186,6 +194,7 @@ impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, C
         self.csn.set_low().map_err(Error::Pin)?;
         // get just the header
         let rc = self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]).map_err(Error::Comm);
+
 
         if rc.is_err() {
             //release the sensor
