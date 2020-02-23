@@ -1,9 +1,7 @@
 
-// use embedded_hal::{
-//     blocking::delay::{DelayUs, DelayMs},
-// };
-
-use super::{SensorInterface, PACKET_HEADER_LENGTH};
+use super::{SensorInterface, SensorCommon, PACKET_HEADER_LENGTH};
+use crate::Error;
+use embedded_hal::blocking::delay::DelayMs;
 
 /// the i2c address normally used by BNO080
 pub const DEFAULT_ADDRESS: u8 =  0x4A;
@@ -24,6 +22,9 @@ pub struct I2cInterface<I2C> {
     address: u8,
     /// buffer for receiving segments of packets from the sensor hub
     seg_recv_buf: [u8; SEG_RECV_BUF_LEN],
+
+    /// number of packets received
+    received_packet_count: usize,
 }
 
 impl<I2C, CommE> I2cInterface<I2C>
@@ -36,34 +37,14 @@ impl<I2C, CommE> I2cInterface<I2C>
             i2c_port: i2c,
             address: addr,
             seg_recv_buf: [0; SEG_RECV_BUF_LEN],
+            received_packet_count: 0,
         }
     }
-}
 
-
-#[derive(Debug)]
-pub enum I2cCommError<E> {
-    /// I2C bus error
-    I2c(E),
-}
-
-impl<I2C, CommE> SensorInterface for I2cInterface<I2C>
-    where
-        I2C: embedded_hal::blocking::i2c::Write<Error = CommE> +
-        embedded_hal::blocking::i2c::Read<Error = CommE>
-{
-    type SensorError = I2cCommError<CommE>;
-
-    fn send_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
-        self.i2c_port.write(self.address,
-                            &packet).map_err(Self::SensorError::I2c)?;
-        Ok(())
-    }
-
-    fn read_packet_header(&mut self, recv_buf: &mut [u8]) -> Result<(), Self::SensorError> {
-        recv_buf[0] = 0;
-        recv_buf[1] = 0;
-        self.i2c_port.read(self.address, &mut recv_buf[..PACKET_HEADER_LENGTH]).map_err(Self::SensorError::I2c)?;
+    fn read_packet_header(&mut self) -> Result<(), Error<CommE, ()>> {
+        self.seg_recv_buf[0] = 0;
+        self.seg_recv_buf[1] = 0;
+        self.i2c_port.read(self.address, &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH]).map_err(Error::Comm)?;
         Ok(())
     }
 
@@ -71,7 +52,7 @@ impl<I2C, CommE> SensorInterface for I2cInterface<I2C>
     fn read_sized_packet(&mut self,
                          total_packet_len: usize,
                          packet_recv_buf: &mut [u8]
-    ) -> Result<usize,  Self::SensorError> {
+    ) -> Result<usize, Error<CommE, ()>> {
         //iprintln!("sized: {}", total_packet_len).unwrap();
         let mut remaining_body_len: usize = total_packet_len - PACKET_HEADER_LENGTH;
         let mut already_read_len: usize = 0;
@@ -83,7 +64,7 @@ impl<I2C, CommE> SensorInterface for I2cInterface<I2C>
             if total_packet_len > 0 {
                 self.i2c_port
                     .read(self.address, &mut packet_recv_buf[..total_packet_len])
-                    .map_err(Self::SensorError::I2c)?;
+                    .map_err(Error::Comm)?;
                 //let packet_declared_len = Self::parse_packet_header(&self.packet_recv_buf[..PACKET_HEADER_LENGTH]);
                 already_read_len = total_packet_len;
             }
@@ -97,7 +78,7 @@ impl<I2C, CommE> SensorInterface for I2cInterface<I2C>
 
                 self.seg_recv_buf[0] = 0;
                 self.seg_recv_buf[1] = 0;
-                self.i2c_port.read(self.address, &mut self.seg_recv_buf[..segment_read_len]).map_err(Self::SensorError::I2c)?;
+                self.i2c_port.read(self.address, &mut self.seg_recv_buf[..segment_read_len]).map_err(Error::Comm)?;
                 //let packet_declared_len = Self::parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
 
                 //if we've never read any segments, transcribe the first packet header;
@@ -116,6 +97,96 @@ impl<I2C, CommE> SensorInterface for I2cInterface<I2C>
 
         Ok(already_read_len)
     }
+}
 
+
+impl<I2C, CommE> SensorInterface for I2cInterface<I2C>
+    where
+        I2C: embedded_hal::blocking::i2c::Write<Error = CommE> +
+        embedded_hal::blocking::i2c::Read<Error = CommE>
+{
+    type SensorError = Error<CommE, ()>;
+
+    fn setup(&mut self, _delay_source: &mut impl DelayMs<u8>) -> Result<(), Self::SensorError> {
+       Ok(())
+    }
+
+    fn wait_for_data_available(&mut self, _max_ms: u8, _delay_source: &mut impl DelayMs<u8>) -> bool {
+        let rc = self.read_packet_header();
+        if rc.is_err() {
+            return false;
+        }
+        let packet_len = SensorCommon::parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
+        packet_len > 0
+    }
+
+    fn send_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
+        self.i2c_port.write(self.address,
+                            &packet).map_err(Error::Comm)?;
+        Ok(())
+    }
+
+    /// Read one packet into the receive buffer
+    fn read_packet(&mut self, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError> {
+        self.read_packet_header()?;
+        let packet_len = SensorCommon::parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
+
+        let received_len =
+            if packet_len > PACKET_HEADER_LENGTH {
+                self.read_sized_packet(packet_len,  recv_buf)?
+            }
+            else {
+                packet_len
+            };
+
+        if  packet_len > 0 {
+            self.received_packet_count += 1;
+        }
+
+        Ok(received_len)
+    }
+
+
+
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::interface::mock_i2c_port::FakeI2cPort;
+    use crate::interface::I2cInterface;
+    use crate::interface::i2c::DEFAULT_ADDRESS;
+    use crate::wrapper::BNO080;
+
+    #[test]
+    fn test_multi_segment_receive_packet() {
+        let mut mock_i2c_port = FakeI2cPort::new();
+
+        let packet = ADVERTISING_PACKET_FULL;
+        mock_i2c_port.add_available_packet(&packet);
+
+        let mut shub = BNO080::new_with_interface(
+            I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
+        let rc = shub.receive_packet();
+
+        assert!(rc.is_ok());
+        let next_packet_size = rc.unwrap_or(0);
+        assert_eq!(next_packet_size, packet.len(), "wrong length");
+    }
+
+
+    // Actual advertising packet received from sensor:
+    pub const ADVERTISING_PACKET_FULL: [u8; 276] = [
+        0x14, 0x81, 0x00, 0x01,
+        0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x80, 0x06, 0x31, 0x2e, 0x30, 0x2e, 0x30, 0x00, 0x02, 0x02, 0x00, 0x01, 0x03, 0x02, 0xff, 0x7f, 0x04, 0x02, 0x00, 0x01, 0x05,
+        0x02, 0xff, 0x7f, 0x08, 0x05, 0x53, 0x48, 0x54, 0x50, 0x00, 0x06, 0x01, 0x00, 0x09, 0x08, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x00, 0x01, 0x04, 0x01, 0x00, 0x00,
+        0x00, 0x08, 0x0b, 0x65, 0x78, 0x65, 0x63, 0x75, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x00, 0x06, 0x01, 0x01, 0x09, 0x07, 0x64, 0x65, 0x76, 0x69, 0x63, 0x65, 0x00, 0x01, 0x04,
+        0x02, 0x00, 0x00, 0x00, 0x08, 0x0a, 0x73, 0x65, 0x6e, 0x73, 0x6f, 0x72, 0x68, 0x75, 0x62, 0x00, 0x06, 0x01, 0x02, 0x09, 0x08, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c,
+        0x00, 0x06, 0x01, 0x03, 0x09, 0x0c, 0x69, 0x6e, 0x70, 0x75, 0x74, 0x4e, 0x6f, 0x72, 0x6d, 0x61, 0x6c, 0x00, 0x07, 0x01, 0x04, 0x09, 0x0a, 0x69, 0x6e, 0x70, 0x75, 0x74,
+        0x57, 0x61, 0x6b, 0x65, 0x00, 0x06, 0x01, 0x05, 0x09, 0x0c, 0x69, 0x6e, 0x70, 0x75, 0x74, 0x47, 0x79, 0x72, 0x6f, 0x52, 0x76, 0x00, 0x80, 0x06, 0x31, 0x2e, 0x31, 0x2e,
+        0x30, 0x00, 0x81, 0x64, 0xf8, 0x10, 0xf5, 0x04, 0xf3, 0x10, 0xf1, 0x10, 0xfb, 0x05, 0xfa, 0x05, 0xfc, 0x11, 0xef, 0x02, 0x01, 0x0a, 0x02, 0x0a, 0x03, 0x0a, 0x04, 0x0a,
+        0x05, 0x0e, 0x06, 0x0a, 0x07, 0x10, 0x08, 0x0c, 0x09, 0x0e, 0x0a, 0x08, 0x0b, 0x08, 0x0c, 0x06, 0x0d, 0x06, 0x0e, 0x06, 0x0f, 0x10, 0x10, 0x05, 0x11, 0x0c, 0x12, 0x06,
+        0x13, 0x06, 0x14, 0x10, 0x15, 0x10, 0x16, 0x10, 0x17, 0x00, 0x18, 0x08, 0x19, 0x06, 0x1a, 0x00, 0x1b, 0x00, 0x1c, 0x06, 0x1d, 0x00, 0x1e, 0x10, 0x1f, 0x00, 0x20, 0x00,
+        0x21, 0x00, 0x22, 0x00, 0x23, 0x00, 0x24, 0x00, 0x25, 0x00, 0x26, 0x00, 0x27, 0x00, 0x28, 0x0e, 0x29, 0x0c, 0x2a, 0x0e
+    ];
 }
 

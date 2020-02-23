@@ -5,11 +5,11 @@ use embedded_hal::{
     blocking::delay::{ DelayMs},
 };
 
-use core::ops::{Shl, Shr};
+use core::ops::{Shr};
 
 
 const PACKET_SEND_BUF_LEN: usize = 256;
-const PACKET_RECV_BUF_LEN: usize = 512;
+const PACKET_RECV_BUF_LEN: usize = 1024;
 
 const NUM_CHANNELS: usize = 6;
 
@@ -22,10 +22,13 @@ pub enum WrapperError<E> {
     InvalidChipId(u8),
     /// Unsupported sensor firmware version
     InvalidFWVersion(u8),
+
+    /// We expected some data but didn't receive any
+    NoDataAvailable,
 }
 
-pub struct Wrapper<SI> {
-    sensor_interface: SI,
+pub struct BNO080<SI> {
+    pub(crate) sensor_interface: SI,
     /// each communication channel with the device has its own sequence number
     sequence_numbers: [u8; NUM_CHANNELS],
     /// buffer for building and sending packet to the sensor hub
@@ -38,11 +41,24 @@ pub struct Wrapper<SI> {
     /// has the product ID been verified
     prod_id_verified: bool,
 
-    /// how many packets have we received
-    received_packet_count: u32,
 }
 
-impl<SI, SE> Wrapper<SI>
+
+impl<SI> BNO080<SI> {
+
+    pub fn new_with_interface(sensor_interface: SI) -> Self {
+        Self {
+            sensor_interface,
+            sequence_numbers: [0; NUM_CHANNELS],
+            packet_send_buf: [0; PACKET_SEND_BUF_LEN],
+            packet_recv_buf: [0; PACKET_RECV_BUF_LEN],
+            device_reset: false,
+            prod_id_verified: false
+        }
+    }
+}
+
+impl<SI, SE> BNO080<SI>
     where
         SI: SensorInterface<SensorError = SE>,
 {
@@ -81,24 +97,6 @@ impl<SI, SE> Wrapper<SI>
         msg_count
     }
 
-    fn parse_packet_header(packet: &[u8]) -> usize {
-        const CONTINUATION_FLAG_CLEAR: u16 = !(0x80);
-        if packet.len() < PACKET_HEADER_LENGTH {
-            return 0;
-        }
-        //Bits 14:0 are used to indicate the total number of bytes in the body plus header
-        //maximum packet length is ... 32767?
-        let raw_pack_len: u16 =
-            (packet[0] as u16) + ((packet[1] as u16)
-                & CONTINUATION_FLAG_CLEAR).shl(8);
-        let packet_len: usize = raw_pack_len as usize;
-
-        //let is_continuation:bool = (packet[1] & 0x80) != 0;
-        //let chan_num =  packet[2];
-        //let seq_num =  packet[3];
-
-        packet_len
-    }
 
     fn handle_advertise_response(&mut self, received_len: usize) {
         let payload_len = received_len - PACKET_HEADER_LENGTH;
@@ -191,29 +189,29 @@ impl<SI, SE> Wrapper<SI>
 
     }
 
-
     /// The BNO080 starts up with all sensors disabled,
     /// waiting for the application to configure it.
-    pub fn init(&mut self, delay: &mut dyn DelayMs<u8>) -> Result<(), WrapperError<SE>> {
+    pub fn init(&mut self, delay_source: &mut impl DelayMs<u8>) -> Result<(), WrapperError<SE>> {
         //Section 5.1.1.1 : On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
 
-        self.soft_reset()?;
-        delay.delay_ms(50);
-        self.eat_one_message();
-        delay.delay_ms(50);
-        self.eat_all_messages(delay);
-        // delay.delay_ms(50);
-        // self.eat_all_messages(delay);
+        self.sensor_interface.setup( delay_source).map_err(WrapperError::CommError)?;
+        //self.soft_reset()?;
+        //delay_source.delay_ms(50);
+        //self.eat_one_message();
+        delay_source.delay_ms(50);
+        self.eat_all_messages(delay_source);
+        // delay_source.delay_ms(50);
+        // self.eat_all_messages(delay_source);
 
-        self.verify_product_id()?;
+        self.verify_product_id(delay_source)?;
 
         Ok(())
     }
 
     /// Tell the sensor to start reporting the fused rotation vector
-/// on a regular cadence. Note that the maximum valid update rate
-/// is 1 kHz, based on the max update rate of the sensor's gyros.
+    /// on a regular cadence. Note that the maximum valid update rate
+    /// is 1 kHz, based on the max update rate of the sensor's gyros.
     pub fn enable_rotation_vector(&mut self, millis_between_reports: u16) -> Result<(), WrapperError<SE>> {
         self.enable_report(SENSOR_REPORTID_ROTATION_VECTOR, millis_between_reports)
     }
@@ -245,7 +243,8 @@ impl<SI, SE> Wrapper<SI>
         Ok(())
     }
 
-    fn send_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<usize, WrapperError<SE>> {
+    /// Prepare a packet for sending, in our send buffer
+    fn prep_send_packet(&mut self, channel: u8, body_data: &[u8]) -> usize {
         let body_len = body_data.len();
 
         self.sequence_numbers[channel as usize] += 1;
@@ -259,52 +258,37 @@ impl<SI, SE> Wrapper<SI>
 
         self.packet_send_buf[..PACKET_HEADER_LENGTH].copy_from_slice(packet_header.as_ref());
         self.packet_send_buf[PACKET_HEADER_LENGTH..packet_length].copy_from_slice(body_data);
+
+        packet_length
+    }
+
+    fn send_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<usize, WrapperError<SE>> {
+        let packet_length = self.prep_send_packet(channel, body_data);
         self.sensor_interface
             .send_packet( &self.packet_send_buf[..packet_length])
             .map_err(WrapperError::CommError)?;
         Ok(packet_length)
     }
 
-
-    /// Read just the first header bytes of a packet
-    /// Return the total size of the packet that follows
-    fn read_unsized_packet(&mut self) -> Result<usize, WrapperError<SE>> {
+    /// Read one packet into the receive buffer
+    pub fn receive_packet(&mut self) -> Result<usize, WrapperError<SE>> {
         self.packet_recv_buf[0] = 0;
         self.packet_recv_buf[1] = 0;
-        self.sensor_interface
-            .read_packet_header(&mut self.packet_recv_buf[..PACKET_HEADER_LENGTH])
+        
+        let packet_len = self.sensor_interface
+            .read_packet(&mut self.packet_recv_buf)
             .map_err(WrapperError::CommError)?;
-        let packet_len = Self::parse_packet_header(&self.packet_recv_buf[..PACKET_HEADER_LENGTH]);
+
         Ok(packet_len)
     }
 
-    /// Read one packet into the receive buffer
-    fn receive_packet(&mut self) -> Result<usize, WrapperError<SE>> {
-        let packet_len:usize = self.read_unsized_packet()?;
-        if  packet_len > 0 {
-            self.received_packet_count += 1;
-        }
-
-        let received_len =
-            if packet_len > PACKET_HEADER_LENGTH {
-                self.sensor_interface
-                    .read_sized_packet(packet_len,&mut self.packet_recv_buf)
-                    .map_err(WrapperError::CommError)?
-            }
-            else {
-                packet_len
-            };
-
-        Ok(received_len)
-    }
-
-    fn verify_product_id(&mut self) -> Result<(), WrapperError<SE> > {
+    fn verify_product_id(&mut self, delay_source: &mut impl DelayMs<u8>) -> Result<(), WrapperError<SE> > {
         let cmd_body: [u8; 2] = [
             SENSORHUB_PROD_ID_REQ, //request product ID
             0, //reserved
         ];
 
-        let recv_len = self.send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
+        let recv_len = self.send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref(), delay_source)?;
 
         //verify the response
         if recv_len > PACKET_HEADER_LENGTH {
@@ -314,9 +298,10 @@ impl<SI, SE> Wrapper<SI>
                 self.prod_id_verified = true;
                 return Ok(())
             }
+            return Err(WrapperError::InvalidChipId(report_id));
         }
-
-        return Err(WrapperError::InvalidChipId(0));
+      
+        return Err(WrapperError::NoDataAvailable)
     }
 
     pub fn soft_reset(&mut self) -> Result<(), WrapperError<SE>> {
@@ -327,10 +312,12 @@ impl<SI, SE> Wrapper<SI>
     }
 
     /// Send a packet and receive the response
-    fn send_and_receive_packet(&mut self, channel: u8, body_data: &[u8]) ->  Result<usize, WrapperError<SE>> {
-        //TODO reimplement with WriteRead once that interface is stable
+    fn send_and_receive_packet(&mut self, channel: u8, body_data: &[u8],  delay_source: &mut impl DelayMs<u8>) ->  Result<usize, WrapperError<SE>> {
         self.send_packet(channel, body_data)?;
-        self.receive_packet()
+        if self.sensor_interface.wait_for_data_available(250, delay_source) {
+            return self.receive_packet()
+        }
+        Err(WrapperError::NoDataAvailable)
     }
 }
 
@@ -373,397 +360,100 @@ const SH2_CMD_INITIALIZE: u8 = 4;
 //const SH2_INIT_SYSTEM: u8 = 1;
 const SH2_STARTUP_INIT_UNSOLICITED:u8 = SH2_CMD_INITIALIZE | SH2_INIT_UNSOLICITED;
 
-// #[cfg(test)]
-// mod tests {
-//
-//     extern crate std;
-//
-//     use crate::{BNO080, PACKET_HEADER_LENGTH};
-//     use embedded_hal::blocking::{
-//         delay::DelayMs,
-//         i2c::{Read, WriteRead, Write}
-//     };
-//     use core::ops::Shr;
-//     use std::collections::VecDeque;
-//
-//     struct FakeDelay {}
-//
-//     impl DelayMs<u8> for FakeDelay {
-//         fn delay_ms(&mut self, _ms: u8) {
-//             // no-op
-//         }
-//     }
-//
-//     const MAX_FAKE_PACKET_SIZE: usize = 512;
-//
-//     //divides up packets into segments
-//     struct FakePacket {
-//         pub addr: u8,
-//         pub len: usize,
-//         pub buf: [u8; MAX_FAKE_PACKET_SIZE],
-//     }
-//
-//     impl FakePacket {
-//         pub fn new_from_slice(slice: &[u8]) -> Self {
-//             let src_len = slice.len();
-//             let mut inst = Self {
-//                 addr: 0,
-//                 len: src_len,
-//                 buf: [0; MAX_FAKE_PACKET_SIZE],
-//             };
-//             inst.buf[..src_len].copy_from_slice(&slice);
-//             inst
-//         }
-//     }
-//
-//     struct FakeI2cPort {
-//         pub available_packets: VecDeque<FakePacket>,
-//         pub sent_packets: VecDeque<FakePacket>,
-//     }
-//
-//     impl FakeI2cPort {
-//         fn new() -> Self {
-//             FakeI2cPort {
-//                 available_packets: VecDeque::with_capacity(3),
-//                 sent_packets: VecDeque::with_capacity(3),
-//             }
-//         }
-//
-//         /// Enqueue a packet to be received later
-//         pub fn add_available_packet(&mut self, bytes: &[u8]) {
-//             let pack = FakePacket::new_from_slice(bytes);
-//             self.available_packets.push_back(pack);
-//         }
-//
-//     }
-//
-//     impl Read for FakeI2cPort {
-//         type Error = ();
-//
-//         fn read(&mut self, addr: u8, buffer: &mut [u8]) -> Result<(), Self::Error> {
-//             let next_pack = self.available_packets.pop_front().unwrap_or(
-//                 FakePacket {
-//                     addr: addr,
-//                     len: 0,
-//                     buf: [0; MAX_FAKE_PACKET_SIZE],
-//                 }
-//             );
-//
-//             let src_len = next_pack.len;
-//             if src_len == 0 {
-//                 return Ok(())
-//             }
-//
-//             let dest_len = buffer.len();
-//
-//             if src_len > dest_len {
-//                 //only read as much as the reader has room for,
-//                 //then push the remainder back onto the queue as a remainder packet
-//                 let read_len = dest_len;
-//                 buffer[..read_len].copy_from_slice(&next_pack.buf[..read_len]);
-//                 let remainder_len = src_len - read_len;
-//                 let mut remainder_packet = FakePacket {
-//                     addr: addr,
-//                     len: remainder_len + 4,
-//                     buf: [0; MAX_FAKE_PACKET_SIZE],
-//                 };
-//                 remainder_packet.buf[PACKET_HEADER_LENGTH..PACKET_HEADER_LENGTH+remainder_len]
-//                     .copy_from_slice(&next_pack.buf[read_len..read_len+remainder_len]);
-//                 remainder_packet.buf[0] = ((remainder_len+4) & 0xFF) as u8;
-//                 remainder_packet.buf[1] = ((((remainder_len+4) & 0xFF00) as u16).shr(8) as u8) | 0x80; //set continuation flag
-//                 self.available_packets.push_front(remainder_packet);
-//             }
-//             else if src_len == dest_len {
-//                 let read_len = src_len;
-//                 buffer[..read_len].copy_from_slice(&next_pack.buf[..read_len]);
-//             }
-//             else { // src_len < dest_len
-//                 panic!("src_len {} dest_len {}", src_len, dest_len);
-//                 return Err(())
-//             }
-//
-//             Ok(())
-//         }
-//     }
-//
-//     impl Write for FakeI2cPort {
-//         type Error = ();
-//
-//         fn write(&mut self, _addr: u8, _bytes: &[u8]) -> Result<(), Self::Error> {
-//             let sent_pack = FakePacket::new_from_slice(_bytes);
-//             self.sent_packets.push_back(sent_pack);
-//             Ok(())
-//         }
-//     }
-//
-//     impl WriteRead for FakeI2cPort {
-//         type Error = ();
-//
-//         fn write_read(&mut self, address: u8, send_buf: &[u8], recv_buf: &mut [u8]) -> Result<(), Self::Error> {
-//             self.write(address, send_buf)?;
-//             self.read(address, recv_buf)?;
-//             Ok(())
-//         }
-//     }
-//
-//
-//
-//     #[test]
-//     fn test_parse_packet_header() {
-//
-//         let short_packet: [u8; 2] = [ 13, 15];
-//         let size = BNO080::<FakeI2cPort>::parse_packet_header(&short_packet);
-//         assert_eq!(0, size, "truncated packet header should have length zero");
-//
-//         let long_packet_len: usize = 1024;
-//         let mut raw_packet: [u8; PACKET_HEADER_LENGTH] = [
-//             (long_packet_len & 0xFF) as u8 ,
-//             long_packet_len.shr(8)  as u8,
-//             0,
-//             0
-//         ];
-//         let size = BNO080::<FakeI2cPort>::parse_packet_header(&raw_packet);
-//         assert_eq!(size, long_packet_len, "verify > 255 packet length");
-//
-//         //now set the continuation flag
-//         raw_packet[1] = 0x80 | raw_packet[1];
-//         let size = BNO080::<FakeI2cPort>::parse_packet_header(&raw_packet);
-//         assert_eq!(size, long_packet_len, "verify continuation packet");
-//
-//         let short_packet_len: usize = 36;
-//         raw_packet = [
-//             (short_packet_len & 0xFF) as u8 ,
-//             short_packet_len.shr(8)  as u8,
-//             0,
-//             0
-//         ];
-//         let size = BNO080::<FakeI2cPort>::parse_packet_header(&raw_packet);
-//         assert_eq!(size, short_packet_len, "verify short packet");
-//
-//         raw_packet[1] = 0x80 | raw_packet[1];
-//         let size = BNO080::<FakeI2cPort>::parse_packet_header(&raw_packet);
-//         assert_eq!(size, short_packet_len, "verify short packet continuation");
-//
-//         // first (uncontinued) packet
-//         raw_packet = [
-//             20 as u8 ,
-//             1  as u8,
-//             0,
-//             0
-//         ];
-//         let size = BNO080::<FakeI2cPort>::parse_packet_header(&raw_packet);
-//         assert_eq!(size, 276, "verify > 255 packet length");
-//
-//         //from actual received packet
-//         raw_packet = [
-//             19 as u8 ,
-//             129  as u8,
-//             0,
-//             1
-//         ];
-//         let size = BNO080::<FakeI2cPort>::parse_packet_header(&raw_packet);
-//         assert_eq!(size, 275, "verify > 255 packet length");
-//
-//     }
-//
-//     #[test]
-//     fn test_receive_unsized() {
-//         let mut mock_i2c_port = FakeI2cPort::new();
-//
-//         let packet  = ADVERTISING_PACKET_FIRST_HEADER;
-//         mock_i2c_port.add_available_packet( &packet);
-//
-//         let mut shub = BNO080::new(mock_i2c_port);
-//         let rc = shub.read_unsized_packet();
-//         assert!(rc.is_ok());
-//         let next_packet_size = rc.unwrap_or(0);
-//         assert_eq!(next_packet_size, 276, "wrong length");
-//     }
-//
-//     #[test]
-//     fn test_send_reset() {
-//         let mut mock_i2c_port = FakeI2cPort::new();
-//
-//         let mut shub = BNO080::new(mock_i2c_port);
-//         let rc = shub.soft_reset();
-//         let sent_pack = shub.i2c_port.sent_packets.pop_front().unwrap();
-//
-//         assert_eq!(sent_pack.len, 5);
-//
-//     }
-//
-// //    #[test]
-// //    fn test_receive_unsized_under() {
-// //        let mut mock_i2c_port = FakeI2cPort::new();
-// //
-// //        let packet: [u8; 3] = [0; 3];
-// //        mock_i2c_port.add_available_packet( &packet);
-// //
-// //        let mut shub = BNO080::new(mock_i2c_port);
-// //        let rc = shub.read_unsized_packet();
-// //        assert!(rc.is_err());
-// //    }
-//
-//
-//     pub const MIDPACK: [u8; 52] = [
-//         0x34,
-//         0x80,
-//         0x02,
-//         0x7B,
-//         0xF8,
-//         0x00,
-//         0x01,
-//         0x02,
-//         0x96,
-//         0xA4,
-//         0x98,
-//         0x00,
-//         0xE6,
-//         0x00,
-//         0x00,
-//         0x00,
-//         0x04,
-//         0x00,
-//         0x00,
-//         0x00,
-//         0xF8,
-//         0x00,
-//         0x04,
-//         0x04,
-//         0x36,
-//         0xA3,
-//         0x98,
-//         0x00,
-//         0x95,
-//         0x01,
-//         0x00,
-//         0x00,
-//         0x02,
-//         0x00,
-//         0x00,
-//         0x00,
-//         0xF8,
-//         0x00,
-//         0x04,
-//         0x02,
-//         0xE3,
-//         0xA2,
-//         0x98,
-//         0x00,
-//         0xD9,
-//         0x01,
-//         0x00,
-//         0x00,
-//         0x07,
-//         0x00,
-//         0x00,
-//         0x00,
-//     ];
-//
-//     #[test]
-//     fn test_receive_midpack() {
-//         let mut mock_i2c_port = FakeI2cPort::new();
-//
-//         let packet = MIDPACK;
-//         mock_i2c_port.add_available_packet( &packet);
-//
-//         let mut shub = BNO080::new(mock_i2c_port);
-//         let rc = shub.receive_packet();
-//         assert!(rc.is_ok());
-//
-//     }
-//
-//     #[test]
-//     fn test_read_unsized_large() {
-//         let mut mock_i2c_port = FakeI2cPort::new();
-//
-//         let packet  = ADVERTISING_PACKET_FULL;
-//         mock_i2c_port.add_available_packet( &packet);
-//
-//         let mut shub = BNO080::new(mock_i2c_port);
-//
-//         let rc = shub.read_unsized_packet();
-//         assert!(rc.is_ok());
-//         let next_packet_size = rc.unwrap_or(0);
-//         assert_eq!(next_packet_size, 276, "wrong length");
-//
-//     }
-//
-//     #[test]
-//     fn test_receive_sized_large() {
-//         let mut mock_i2c_port = FakeI2cPort::new();
-//
-//         let packet  = ADVERTISING_PACKET_FULL;
-//         mock_i2c_port.add_available_packet( &packet);
-//
-//         let mut shub = BNO080::new(mock_i2c_port);
-//
-//         let rc = shub.read_sized_packet(packet.len());
-//         assert!(rc.is_ok());
-//         let next_packet_size = rc.unwrap_or(0);
-//         assert_eq!(next_packet_size, 276, "wrong length");
-//     }
-//
-//     #[test]
-//     fn test_receive_startup() {
-//         let mut mock_i2c_port = FakeI2cPort::new();
-//
-//         //actual startup response packet
-//         let raw_packet = ADVERTISING_PACKET_FULL;
-//         let size = BNO080::<FakeI2cPort>::parse_packet_header(&raw_packet);
-//         assert_eq!(size, ADVERTISING_PACKET_FULL.len(), "verify packet length");
-//         mock_i2c_port.add_available_packet( &raw_packet);
-//
-//         let mut shub = BNO080::new(mock_i2c_port);
-//         let rc = shub.receive_packet();
-//         assert!(rc.is_ok());
-//         let recv_len = rc.unwrap_or(0);
-//         assert_eq!(recv_len, size, "wrong length");
-//     }
-//
-//     #[test]
-//     fn test_handle_one_message() {
-//         let mut mock_i2c_port = FakeI2cPort::new();
-//
-//         //actual startup response packet
-//         let raw_packet = ADVERTISING_PACKET_FULL;
-//         mock_i2c_port.add_available_packet( &raw_packet);
-//
-//         let mut shub = BNO080::new(mock_i2c_port);
-//         let msg_count = shub.handle_one_message();
-//         assert_eq!(msg_count, 1, "wrong msg_count");
-//     }
-//
-//     #[test]
-//     fn test_handle_adv_message() {
-//         //handle_all_messages
-//         let mut mock_i2c_port = FakeI2cPort::new();
-//
-//         //actual startup response packet
-//         let raw_packet = ADVERTISING_PACKET_FULL;
-//         mock_i2c_port.add_available_packet( &raw_packet);
-//
-//         let mut shub = BNO080::new(mock_i2c_port);
-//         let msg_count = shub.handle_all_messages();
-//         assert_eq!(msg_count, 1, "wrong msg_count");
-//
-//     }
-//
-//     // Actual advertising packet received from sensor:
-//     pub const ADVERTISING_PACKET_FULL: [u8; 276] = [
-//         0x14, 0x81, 0x00, 0x01,
-//         0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x80, 0x06, 0x31, 0x2e, 0x30, 0x2e, 0x30, 0x00, 0x02, 0x02, 0x00, 0x01, 0x03, 0x02, 0xff, 0x7f, 0x04, 0x02, 0x00, 0x01, 0x05,
-//         0x02, 0xff, 0x7f, 0x08, 0x05, 0x53, 0x48, 0x54, 0x50, 0x00, 0x06, 0x01, 0x00, 0x09, 0x08, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x00, 0x01, 0x04, 0x01, 0x00, 0x00,
-//         0x00, 0x08, 0x0b, 0x65, 0x78, 0x65, 0x63, 0x75, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x00, 0x06, 0x01, 0x01, 0x09, 0x07, 0x64, 0x65, 0x76, 0x69, 0x63, 0x65, 0x00, 0x01, 0x04,
-//         0x02, 0x00, 0x00, 0x00, 0x08, 0x0a, 0x73, 0x65, 0x6e, 0x73, 0x6f, 0x72, 0x68, 0x75, 0x62, 0x00, 0x06, 0x01, 0x02, 0x09, 0x08, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c,
-//         0x00, 0x06, 0x01, 0x03, 0x09, 0x0c, 0x69, 0x6e, 0x70, 0x75, 0x74, 0x4e, 0x6f, 0x72, 0x6d, 0x61, 0x6c, 0x00, 0x07, 0x01, 0x04, 0x09, 0x0a, 0x69, 0x6e, 0x70, 0x75, 0x74,
-//         0x57, 0x61, 0x6b, 0x65, 0x00, 0x06, 0x01, 0x05, 0x09, 0x0c, 0x69, 0x6e, 0x70, 0x75, 0x74, 0x47, 0x79, 0x72, 0x6f, 0x52, 0x76, 0x00, 0x80, 0x06, 0x31, 0x2e, 0x31, 0x2e,
-//         0x30, 0x00, 0x81, 0x64, 0xf8, 0x10, 0xf5, 0x04, 0xf3, 0x10, 0xf1, 0x10, 0xfb, 0x05, 0xfa, 0x05, 0xfc, 0x11, 0xef, 0x02, 0x01, 0x0a, 0x02, 0x0a, 0x03, 0x0a, 0x04, 0x0a,
-//         0x05, 0x0e, 0x06, 0x0a, 0x07, 0x10, 0x08, 0x0c, 0x09, 0x0e, 0x0a, 0x08, 0x0b, 0x08, 0x0c, 0x06, 0x0d, 0x06, 0x0e, 0x06, 0x0f, 0x10, 0x10, 0x05, 0x11, 0x0c, 0x12, 0x06,
-//         0x13, 0x06, 0x14, 0x10, 0x15, 0x10, 0x16, 0x10, 0x17, 0x00, 0x18, 0x08, 0x19, 0x06, 0x1a, 0x00, 0x1b, 0x00, 0x1c, 0x06, 0x1d, 0x00, 0x1e, 0x10, 0x1f, 0x00, 0x20, 0x00,
-//         0x21, 0x00, 0x22, 0x00, 0x23, 0x00, 0x24, 0x00, 0x25, 0x00, 0x26, 0x00, 0x27, 0x00, 0x28, 0x0e, 0x29, 0x0c, 0x2a, 0x0e
-//     ];
-//
-//     pub const ADVERTISING_PACKET_FIRST_HEADER: [u8; 4] = [0x14, 0x01, 0x00, 0x00];
-//
-// }
+#[cfg(test)]
+mod tests {
+    use crate::interface::mock_i2c_port::FakeI2cPort;
+    use super::BNO080;
+    //use super::*;
+
+    use crate::interface::I2cInterface;
+    use crate::interface::i2c::DEFAULT_ADDRESS;
+
+
+
+//    #[test]
+//    fn test_receive_unsized_under() {
+//        let mut mock_i2c_port = FakeI2cPort::new();
+//
+//        let packet: [u8; 3] = [0; 3];
+//        mock_i2c_port.add_available_packet( &packet);
+//
+//        let mut shub = BNO080::new(mock_i2c_port);
+//        let rc = shub.read_unsized_packet();
+//        assert!(rc.is_err());
+//    }
+
+    // //TODO give access to sent packets for testing porpoises
+    // #[test]
+    // fn test_send_reset() {
+    //     let mut mock_i2c_port = FakeI2cPort::new();
+    //     let mut shub = Wrapper::new_with_interface(
+    //         I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
+    //     let rc = shub.soft_reset();
+    //     let sent_pack = shub.sensor_interface.sent_packets.pop_front().unwrap();
+    //     assert_eq!(sent_pack.len, 5);
+    // }
+
+    pub const MIDPACK: [u8; 52] = [
+        0x34, 0x00, 0x02, 0x7B,
+        0xF8, 0x00, 0x01, 0x02,
+        0x96, 0xA4, 0x98, 0x00,
+        0xE6, 0x00, 0x00, 0x00,
+        0x04, 0x00, 0x00, 0x00,
+        0xF8, 0x00, 0x04, 0x04,
+        0x36, 0xA3, 0x98, 0x00,
+        0x95, 0x01, 0x00, 0x00,
+        0x02, 0x00, 0x00, 0x00,
+        0xF8, 0x00, 0x04, 0x02,
+        0xE3, 0xA2, 0x98, 0x00,
+        0xD9, 0x01, 0x00, 0x00,
+        0x07, 0x00, 0x00, 0x00,
+    ];
+
+    #[test]
+    fn test_receive_midpack() {
+        let mut mock_i2c_port = FakeI2cPort::new();
+
+        let packet = MIDPACK;
+        mock_i2c_port.add_available_packet( &packet);
+
+        let mut shub = BNO080::new_with_interface(
+            I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
+        let rc = shub.receive_packet();
+        assert!(rc.is_ok());
+    }
+
+
+    #[test]
+    fn test_handle_adv_message() {
+        let mut mock_i2c_port = FakeI2cPort::new();
+
+        //actual startup response packet
+        let raw_packet = ADVERTISING_PACKET_FULL;
+        mock_i2c_port.add_available_packet( &raw_packet);
+
+        let mut shub = BNO080::new_with_interface(
+            I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
+
+        let msg_count = shub.handle_one_message();
+        assert_eq!(msg_count, 1, "wrong msg_count");
+
+    }
+
+    // Actual advertising packet received from sensor:
+    pub const ADVERTISING_PACKET_FULL: [u8; 276] = [
+        0x14, 0x81, 0x00, 0x01,
+        0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x80, 0x06, 0x31, 0x2e, 0x30, 0x2e, 0x30, 0x00, 0x02, 0x02, 0x00, 0x01, 0x03, 0x02, 0xff, 0x7f, 0x04, 0x02, 0x00, 0x01, 0x05,
+        0x02, 0xff, 0x7f, 0x08, 0x05, 0x53, 0x48, 0x54, 0x50, 0x00, 0x06, 0x01, 0x00, 0x09, 0x08, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x00, 0x01, 0x04, 0x01, 0x00, 0x00,
+        0x00, 0x08, 0x0b, 0x65, 0x78, 0x65, 0x63, 0x75, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x00, 0x06, 0x01, 0x01, 0x09, 0x07, 0x64, 0x65, 0x76, 0x69, 0x63, 0x65, 0x00, 0x01, 0x04,
+        0x02, 0x00, 0x00, 0x00, 0x08, 0x0a, 0x73, 0x65, 0x6e, 0x73, 0x6f, 0x72, 0x68, 0x75, 0x62, 0x00, 0x06, 0x01, 0x02, 0x09, 0x08, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c,
+        0x00, 0x06, 0x01, 0x03, 0x09, 0x0c, 0x69, 0x6e, 0x70, 0x75, 0x74, 0x4e, 0x6f, 0x72, 0x6d, 0x61, 0x6c, 0x00, 0x07, 0x01, 0x04, 0x09, 0x0a, 0x69, 0x6e, 0x70, 0x75, 0x74,
+        0x57, 0x61, 0x6b, 0x65, 0x00, 0x06, 0x01, 0x05, 0x09, 0x0c, 0x69, 0x6e, 0x70, 0x75, 0x74, 0x47, 0x79, 0x72, 0x6f, 0x52, 0x76, 0x00, 0x80, 0x06, 0x31, 0x2e, 0x31, 0x2e,
+        0x30, 0x00, 0x81, 0x64, 0xf8, 0x10, 0xf5, 0x04, 0xf3, 0x10, 0xf1, 0x10, 0xfb, 0x05, 0xfa, 0x05, 0xfc, 0x11, 0xef, 0x02, 0x01, 0x0a, 0x02, 0x0a, 0x03, 0x0a, 0x04, 0x0a,
+        0x05, 0x0e, 0x06, 0x0a, 0x07, 0x10, 0x08, 0x0c, 0x09, 0x0e, 0x0a, 0x08, 0x0b, 0x08, 0x0c, 0x06, 0x0d, 0x06, 0x0e, 0x06, 0x0f, 0x10, 0x10, 0x05, 0x11, 0x0c, 0x12, 0x06,
+        0x13, 0x06, 0x14, 0x10, 0x15, 0x10, 0x16, 0x10, 0x17, 0x00, 0x18, 0x08, 0x19, 0x06, 0x1a, 0x00, 0x1b, 0x00, 0x1c, 0x06, 0x1d, 0x00, 0x1e, 0x10, 0x1f, 0x00, 0x20, 0x00,
+        0x21, 0x00, 0x22, 0x00, 0x23, 0x00, 0x24, 0x00, 0x25, 0x00, 0x26, 0x00, 0x27, 0x00, 0x28, 0x0e, 0x29, 0x0c, 0x2a, 0x0e
+    ];
+
+
+}
