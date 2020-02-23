@@ -120,7 +120,7 @@ impl<I2C, CommE> SensorInterface for I2cInterface<I2C>
         packet_len > 0
     }
 
-    fn send_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
+    fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
         self.i2c_port.write(self.address,
                             &packet).map_err(Error::Comm)?;
         Ok(())
@@ -146,6 +146,13 @@ impl<I2C, CommE> SensorInterface for I2cInterface<I2C>
         Ok(received_len)
     }
 
+
+    fn send_and_receive_packet(&mut self, _send_buf: &[u8],
+                               _recv_buf: &mut [u8],
+                               _delay_source: &mut impl DelayMs<u8>)
+        -> Result<usize,  Self::SensorError> {
+        unimplemented!()
+    }
 
 
 }

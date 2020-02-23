@@ -36,10 +36,25 @@ pub struct BNO080<SI> {
     /// buffer for building packets received from the sensor hub
     packet_recv_buf: [u8; PACKET_RECV_BUF_LEN],
 
+    last_packet_len_received: usize,
     /// has the device been succesfully reset
     device_reset: bool,
     /// has the product ID been verified
     prod_id_verified: bool,
+
+    init_received: bool, 
+
+    /// have we received the full advertisement
+    advert_received: bool, 
+
+    /// have we received an error list
+    error_list_received: bool,
+    last_error_received: u8,
+
+    last_chan_received: u8,
+    last_exec_chan_rid: u8,
+    last_command_chan_rid: u8,
+    last_control_chan_rid: u8,
 
 }
 
@@ -52,8 +67,17 @@ impl<SI> BNO080<SI> {
             sequence_numbers: [0; NUM_CHANNELS],
             packet_send_buf: [0; PACKET_SEND_BUF_LEN],
             packet_recv_buf: [0; PACKET_RECV_BUF_LEN],
+            last_packet_len_received: 0,
             device_reset: false,
-            prod_id_verified: false
+            prod_id_verified: false,
+            init_received: false,
+            advert_received: false,
+            error_list_received: false,
+            last_error_received: 0,
+            last_chan_received: 0,
+            last_exec_chan_rid: 0,
+            last_command_chan_rid: 0,
+            last_control_chan_rid: 0,
         }
     }
 }
@@ -70,10 +94,26 @@ impl<SI, SE> BNO080<SI>
 
     /// Consume all available messages on the port without processing them
     pub fn eat_all_messages(&mut self, delay: &mut dyn DelayMs<u8>) {
-        loop {
+        let mut miss_count = 0;
+        while miss_count < 10 {
             let received_len = self.eat_one_message();
             if received_len == 0 {
-                break;
+                miss_count += 1;
+                delay.delay_ms(2);
+            } else {
+                //give some time to other parts of the system
+                delay.delay_ms(1);
+            }
+        }
+    }
+
+    pub fn handle_all_messages(&mut self, delay: &mut dyn DelayMs<u8>) {
+        let mut miss_count = 0;
+        while miss_count < 5 {
+            let handled_count = self.handle_one_message();
+            if handled_count == 0 {
+                miss_count += 1;
+                delay.delay_ms(2);
             } else {
                 //give some time to other parts of the system
                 delay.delay_ms(1);
@@ -110,6 +150,7 @@ impl<SI, SE> BNO080<SI>
             cursor += len as usize;
         }
 
+        self.advert_received = true;
     }
 
     // Sensor input reports have the form:
@@ -134,23 +175,36 @@ impl<SI, SE> BNO080<SI>
         }
     }
 
+    fn handle_error_list(&mut self, received_len: usize) {
+        let payload_len = received_len - PACKET_HEADER_LENGTH;
+        let payload = &self.packet_recv_buf[PACKET_HEADER_LENGTH..received_len];
+
+        self.error_list_received = true;
+        for cursor in 1..payload_len {
+            let err: u8 = payload[cursor];
+            self.last_error_received = err;
+        }
+    }
+
     pub fn handle_received_packet(&mut self, received_len: usize) {
         let msg = &self.packet_recv_buf[..received_len];
         let chan_num =  msg[2];
         //let _seq_num =  msg[3];
         let report_id: u8 = msg[4];
 
+        self.last_chan_received = chan_num;
         match chan_num {
-            CHANNEL_SENSOR_REPORTS => {
-                self.handle_input_report(received_len);
-            },
-            SHTP_CHAN_COMMAND => {
+
+            CHANNEL_COMMAND => {
                 match report_id {
-                    0 => { //RESP_ADVERTISE
+                    CMD_RESP_ADVERTISEMENT => {
                         self.handle_advertise_response(received_len);
                     },
+                    CMD_RESP_ERROR_LIST => {
+                        self.handle_error_list(received_len);
+                    },
                     _ => {
-
+                        self.last_command_chan_rid = report_id;
                     }
                 }
             },
@@ -160,30 +214,34 @@ impl<SI, SE> BNO080<SI>
                         self.device_reset = true;
                     },
                     _ => {
-
+                        self.last_exec_chan_rid = report_id;
                     }
                 }
             },
             CHANNEL_HUB_CONTROL => {
                 match report_id {
-                    SENSORHUB_COMMAND_RESP => {
+                    SENSORHUB_COMMAND_RESP => { // 0xF1 / 241
                         let cmd_resp = msg[6];
                         if cmd_resp == SH2_STARTUP_INIT_UNSOLICITED {
-
+                            self.init_received = true;
                         }
-                        else {
+                        else if cmd_resp == SH2_INIT_SYSTEM {
+                            self.init_received = true;
                         }
                     },
-                    SENSORHUB_PROD_ID_RESP => {
+                    SENSORHUB_PROD_ID_RESP => { // 0xF8 / 248
                         self.prod_id_verified = true;
                     },
                     _ =>  {
-
+                        self.last_control_chan_rid = report_id;
                     }
                 }
             },
+            CHANNEL_SENSOR_REPORTS => {
+                self.handle_input_report(received_len);
+            },
             _ => {
-
+                self.last_chan_received = chan_num;
             }
         }
 
@@ -197,13 +255,14 @@ impl<SI, SE> BNO080<SI>
 
         self.sensor_interface.setup( delay_source).map_err(WrapperError::CommError)?;
         //self.soft_reset()?;
-        //delay_source.delay_ms(50);
-        //self.eat_one_message();
-        delay_source.delay_ms(50);
-        self.eat_all_messages(delay_source);
         // delay_source.delay_ms(50);
-        // self.eat_all_messages(delay_source);
-
+        // self.eat_one_message();
+        delay_source.delay_ms(50);
+        self.handle_all_messages(delay_source);
+        //self.eat_all_messages(delay_source);
+        delay_source.delay_ms(50);
+        self.handle_all_messages(delay_source);
+        
         self.verify_product_id(delay_source)?;
 
         Ok(())
@@ -265,7 +324,7 @@ impl<SI, SE> BNO080<SI>
     fn send_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<usize, WrapperError<SE>> {
         let packet_length = self.prep_send_packet(channel, body_data);
         self.sensor_interface
-            .send_packet( &self.packet_send_buf[..packet_length])
+            .write_packet( &self.packet_send_buf[..packet_length])
             .map_err(WrapperError::CommError)?;
         Ok(packet_length)
     }
@@ -279,6 +338,7 @@ impl<SI, SE> BNO080<SI>
             .read_packet(&mut self.packet_recv_buf)
             .map_err(WrapperError::CommError)?;
 
+        self.last_packet_len_received = packet_len;
         Ok(packet_len)
     }
 
@@ -289,19 +349,15 @@ impl<SI, SE> BNO080<SI>
         ];
 
         let recv_len = self.send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref(), delay_source)?;
-
-        //verify the response
-        if recv_len > PACKET_HEADER_LENGTH {
-            //iprintln!("resp: {:?}", &self.msg_buf[..recv_len]).unwrap();
-            let report_id = self.packet_recv_buf[PACKET_HEADER_LENGTH + 0];
-            if SENSORHUB_PROD_ID_RESP == report_id {
-                self.prod_id_verified = true;
-                return Ok(())
-            }
-            return Err(WrapperError::InvalidChipId(report_id));
+        if recv_len > 0 {
+            self.handle_received_packet(recv_len);
         }
-      
-        return Err(WrapperError::NoDataAvailable)
+
+        if !self.prod_id_verified {
+            return Err(WrapperError::InvalidChipId(0));
+        }
+        Ok(())
+
     }
 
     pub fn soft_reset(&mut self) -> Result<(), WrapperError<SE>> {
@@ -312,23 +368,35 @@ impl<SI, SE> BNO080<SI>
     }
 
     /// Send a packet and receive the response
-    fn send_and_receive_packet(&mut self, channel: u8, body_data: &[u8],  delay_source: &mut impl DelayMs<u8>) ->  Result<usize, WrapperError<SE>> {
-        self.send_packet(channel, body_data)?;
-        if self.sensor_interface.wait_for_data_available(250, delay_source) {
-            return self.receive_packet()
-        }
-        Err(WrapperError::NoDataAvailable)
+    fn send_and_receive_packet(&mut self, channel: u8, body_data: &[u8], delay_source: &mut impl DelayMs<u8>) ->  Result<usize, WrapperError<SE>> {
+        let send_packet_length = self.prep_send_packet(channel, body_data);
+        let recv_packet_length = self.sensor_interface.send_and_receive_packet(
+            &self.packet_send_buf[..send_packet_length].as_ref(),
+            &mut self.packet_recv_buf,
+            delay_source).map_err(WrapperError::CommError)?;
+        Ok(recv_packet_length)
     }
 }
 
 // The BNO080 supports six communication channels:
-const  SHTP_CHAN_COMMAND: u8 = 0; /// the SHTP command channel
-const  CHANNEL_EXECUTABLE: u8 = 1; /// executable channel
-const  CHANNEL_HUB_CONTROL: u8 = 2; /// sensor hub control channel
-const  CHANNEL_SENSOR_REPORTS: u8 = 3; /// input sensor reports (non-wake, not gyroRV)
+const CHANNEL_COMMAND: u8 = 0; /// the SHTP command channel
+const CHANNEL_EXECUTABLE: u8 = 1; /// executable channel
+const CHANNEL_HUB_CONTROL: u8 = 2; /// sensor hub control channel
+const CHANNEL_SENSOR_REPORTS: u8 = 3; /// input sensor reports (non-wake, not gyroRV)
 //const  CHANNEL_WAKE_REPORTS: usize = 4; /// wake input sensor reports (for sensors configured as wake up sensors)
 //const  CHANNEL_GYRO_ROTATION: usize = 5; ///  gyro rotation vector (gyroRV)
 
+
+
+/// Command Channel requests / responses
+///
+// Commands
+//const CMD_GET_ADVERTISEMENT: u8 = 0;
+//const CMD_SEND_ERROR_LIST: u8 = 1;
+
+/// Responses
+const CMD_RESP_ADVERTISEMENT: u8 = 0;
+const CMD_RESP_ERROR_LIST: u8 = 1;
 
 /// SHTP constants
 const SENSORHUB_PROD_ID_REQ: u8 = 0xF9;
@@ -357,7 +425,7 @@ const EXECUTABLE_DEVICE_RESP_RESET_COMPLETE: u8 = 1;
 /// Commands and subcommands
 const SH2_INIT_UNSOLICITED: u8 = 0x80;
 const SH2_CMD_INITIALIZE: u8 = 4;
-//const SH2_INIT_SYSTEM: u8 = 1;
+const SH2_INIT_SYSTEM: u8 = 1;
 const SH2_STARTUP_INIT_UNSOLICITED:u8 = SH2_CMD_INITIALIZE | SH2_INIT_UNSOLICITED;
 
 #[cfg(test)]

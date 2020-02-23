@@ -16,15 +16,15 @@ pub trait SensorInterface {
     /// give the sensor interface a chance to set up
     fn setup(&mut self, delay_source: &mut impl DelayMs<u8> ) -> Result<(), Self::SensorError>;
 
-    /// Send the whole packet provided
-    fn send_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError>;
+    /// Write the whole packet provided
+    fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError>;
 
     /// Read the next packet from the sensor
     /// Returns the size of the packet read (up to the size of the slice provided)
     fn read_packet(&mut self, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError>;
 
-    // Send a packet and receive the response immediately
-    //fn send_and_receive_packet(&mut self, send_buf: &[u8], recv_buf: &mut [u8]) -> Result<usize, CommBusError>;
+    /// Send a packet and receive the response immediately
+    fn send_and_receive_packet(&mut self, send_buf: &[u8], recv_buf: &mut [u8],  delay_source: &mut impl DelayMs<u8>) -> Result<usize,  Self::SensorError>;
 
     fn wait_for_data_available(&mut self, max_ms: u8, delay_source: &mut impl DelayMs<u8>) -> bool;
 }

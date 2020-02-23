@@ -51,6 +51,28 @@ impl<SPI, CSN, IN, WAK, RSTN, CommE, PinE> SpiInterface<SPI, CSN, IN, WAK, RSTN>
     fn wait_for_ready(&mut self, delay_source: &mut impl DelayMs<u8>) -> bool {
         self.wait_for_data_available(250, delay_source)
     }
+
+    /// read the body ("cargo") of a packet,
+    /// return the total packet length read
+    fn read_packet_cargo(&mut self, recv_buf: &mut [u8]) -> usize  {
+        let mut packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
+        // now get the body
+        if (packet_len > PACKET_HEADER_LENGTH) && (packet_len < recv_buf.len()) {
+            //exchange 0xFF bytes for whatever the sensor is sending
+            for w in recv_buf[PACKET_HEADER_LENGTH..packet_len].iter_mut() {
+                *w = 0xFF;
+            }
+            let rc = self.spi.transfer( &mut recv_buf[PACKET_HEADER_LENGTH..packet_len]);
+            if rc.is_err() {
+                packet_len = 0;
+            }
+        }
+        else {
+            packet_len = 0;
+        }
+
+        packet_len
+    }
 }
 
 impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, CSN, IN, WAK, RS>
@@ -75,6 +97,7 @@ impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, C
         if self.wait_for_ready(delay_source) {
             // TODO do we need to ever drop this low? or assume the sensor stays awake?
             //self.waken.set_low().map_err(Error::Pin)?;
+            
             return Ok(())
         }
 
@@ -91,7 +114,52 @@ impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, C
         false
     }
 
-    fn send_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
+    fn send_and_receive_packet(&mut self, send_buf: &[u8], recv_buf: &mut [u8], delay_source: &mut impl DelayMs<u8>)
+        -> Result<usize,  Self::SensorError> {
+
+        //ensure that the first header bytes are zeroed since we're not sending any data
+        for i in recv_buf[..PACKET_HEADER_LENGTH].iter_mut() {
+            *i = 0;
+        }
+
+        //grab the sensor
+        self.csn.set_low().map_err(Error::Pin)?;
+        let rc = self.spi.write(&send_buf).map_err(Error::Comm);
+
+        if rc.is_err() {
+            //release the sensor
+            self.csn.set_high().map_err(Error::Pin)?;
+            return Err(rc.unwrap_err());
+        }
+
+        
+        if !self.wait_for_data_available(50, delay_source) {
+            self.csn.set_high().map_err(Error::Pin)?;
+            return Ok(0)
+        }
+
+        // get just the header
+        let rc = self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]).map_err(Error::Comm);
+        if rc.is_err() {
+            //release the sensor
+            self.csn.set_high().map_err(Error::Pin)?;
+            return Err(rc.unwrap_err());
+        }
+
+        let packet_len = self.read_packet_cargo(recv_buf);
+
+        //release the sensor
+        self.csn.set_high().map_err(Error::Pin)?;
+
+        if  packet_len > 0 {
+            self.received_packet_count += 1;
+        }
+
+        Ok(packet_len)
+
+    }
+
+    fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
         self.csn.set_low().map_err(Error::Pin)?;
         let rc = self.spi.write(&packet).map_err(Error::Comm);
         self.csn.set_high().map_err(Error::Pin)?;
@@ -99,7 +167,6 @@ impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, C
         if rc.is_err() {
             return Err(rc.unwrap_err());
         }
-
 
         Ok(())
     }
@@ -110,37 +177,31 @@ impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, C
             return Ok(0)
         }
 
-        // grab this sensor
-        self.csn.set_low().map_err(Error::Pin)?;
-
         //ensure that the first header bytes are zeroed since we're not sending any data
         for i in recv_buf[..PACKET_HEADER_LENGTH].iter_mut() {
             *i = 0;
         }
 
+        // grab this sensor
+        self.csn.set_low().map_err(Error::Pin)?;
         // get just the header
-        self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]).map_err(Error::Comm)?;
-        let mut packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
-        // now get the body
-        if packet_len > PACKET_HEADER_LENGTH {
-            if packet_len < recv_buf.len() {
-                //exchnage 0xFF bytes for whatever the sensor is sending
-                for w in recv_buf[PACKET_HEADER_LENGTH..packet_len].iter_mut() {
-                    *w = 0xFF;
-                }
-                self.spi.transfer( &mut recv_buf[PACKET_HEADER_LENGTH..packet_len]).map_err(Error::Comm)?;
-            }
-            else {
-                packet_len = 0;
-            }
+        let rc = self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]).map_err(Error::Comm);
+
+        if rc.is_err() {
+            //release the sensor
+            self.csn.set_high().map_err(Error::Pin)?;
+            return Err(rc.unwrap_err());
         }
+
+        let packet_len = self.read_packet_cargo(recv_buf);
+
+        //release the sensor
+        self.csn.set_high().map_err(Error::Pin)?;
 
         if  packet_len > 0 {
             self.received_packet_count += 1;
         }
 
-        // release the sensor
-        self.csn.set_high().map_err(Error::Pin)?;
         Ok(packet_len)
     }
 }
