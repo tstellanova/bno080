@@ -1,5 +1,4 @@
 use crate::interface::{
-    DebugFunc,
     SensorInterface,
     PACKET_HEADER_LENGTH};
 use embedded_hal::{
@@ -7,7 +6,11 @@ use embedded_hal::{
 };
 
 use core::ops::{Shl, Shr};
+// use core::fmt::Write;
+use cortex_m::asm::bkpt;
 
+#[cfg(debug_assertions)]
+use cortex_m_semihosting::{hprint, hprintln};
 
 const PACKET_SEND_BUF_LEN: usize = 256;
 const PACKET_RECV_BUF_LEN: usize = 1024;
@@ -37,7 +40,7 @@ pub struct BNO080<SI> {
     /// buffer for building packets received from the sensor hub
     packet_recv_buf: [u8; PACKET_RECV_BUF_LEN],
 
-    debug_func: Option<DebugFunc>,
+
     last_packet_len_received: usize,
     /// has the device been succesfully reset
     device_reset: bool,
@@ -69,7 +72,6 @@ impl<SI> BNO080<SI> {
             sequence_numbers: [0; NUM_CHANNELS],
             packet_send_buf: [0; PACKET_SEND_BUF_LEN],
             packet_recv_buf: [0; PACKET_RECV_BUF_LEN],
-            debug_func: None,
             last_packet_len_received: 0,
             device_reset: false,
             prod_id_verified: false,
@@ -111,12 +113,10 @@ impl<SI, SE> BNO080<SI>
     }
 
     pub fn handle_all_messages(&mut self, delay: &mut dyn DelayMs<u8>) {
-        let mut miss_count = 0;
-        while miss_count < 5 {
+        loop {
             let handled_count = self.handle_one_message();
             if handled_count == 0 {
-                miss_count += 1;
-                delay.delay_ms(2);
+                break;
             } else {
                 //give some time to other parts of the system
                 delay.delay_ms(1);
@@ -146,6 +146,7 @@ impl<SI, SE> BNO080<SI>
         let payload = &self.packet_recv_buf[PACKET_HEADER_LENGTH..received_len];
         let mut cursor:usize = 1; //skip response type
 
+        hprintln!("AdvRsp: {}", payload_len).unwrap();
         while cursor < payload_len {
             let _tag: u8 = payload[cursor]; cursor += 1;
             let len: u8 = payload[cursor]; cursor +=1;
@@ -170,10 +171,10 @@ impl<SI, SE> BNO080<SI>
 
         match feature_report_id {
             SENSOR_REPORTID_ROTATION_VECTOR => {
-                //iprintln!("SENSOR_REPORTID_ROTATION_VECTOR").unwrap();
+                hprintln!("rotv").unwrap();
             },
             _ => {
-                //iprintln!("handle_input_report[{}]: 0x{:01x} ", received_len, feature_report_id).unwrap();
+                hprintln!("unhin[{}]: {:x} ", received_len, feature_report_id).unwrap();
             }
         }
     }
@@ -186,6 +187,7 @@ impl<SI, SE> BNO080<SI>
         for cursor in 1..payload_len {
             let err: u8 = payload[cursor];
             self.last_error_received = err;
+            hprintln!("lerr: {:x}", err).unwrap();
         }
     }
 
@@ -208,6 +210,7 @@ impl<SI, SE> BNO080<SI>
                     },
                     _ => {
                         self.last_command_chan_rid = report_id;
+                        hprintln!("unh cmd: {}", report_id).unwrap();
                     }
                 }
             },
@@ -215,9 +218,11 @@ impl<SI, SE> BNO080<SI>
                 match report_id {
                     EXECUTABLE_DEVICE_RESP_RESET_COMPLETE => {
                         self.device_reset = true;
+                        hprintln!("resp_reset").unwrap();
                     },
                     _ => {
                         self.last_exec_chan_rid = report_id;
+                        hprintln!("unh exe: {:x}", report_id).unwrap();
                     }
                 }
             },
@@ -231,12 +236,15 @@ impl<SI, SE> BNO080<SI>
                         else if cmd_resp == SH2_INIT_SYSTEM {
                             self.init_received = true;
                         }
+                        hprintln!("CMD_RESP: {:x}", cmd_resp).unwrap();
                     },
                     SENSORHUB_PROD_ID_RESP => { // 0xF8 / 248
+                        hprintln!("PID_RESP").unwrap();
                         self.prod_id_verified = true;
                     },
                     _ =>  {
                         self.last_control_chan_rid = report_id;
+                        hprintln!("unh hbc: {:x}", report_id).unwrap();
                     }
                 }
             },
@@ -245,6 +253,7 @@ impl<SI, SE> BNO080<SI>
             },
             _ => {
                 self.last_chan_received = chan_num;
+                hprintln!("unh chan {:x}", chan_num).unwrap();
             }
         }
 
@@ -257,13 +266,13 @@ impl<SI, SE> BNO080<SI>
         // its full advertisement response, unsolicited, to the host.
 
         self.sensor_interface.setup( delay_source).map_err(WrapperError::CommError)?;
-        //self.soft_reset()?;
-        self.sensor_interface.wait_for_data_available(150, delay_source);
-        self.handle_one_message();// handle advert
-        self.sensor_interface.wait_for_data_available(150, delay_source);
-        self.handle_one_message(); // handle unsolicited unitialize response
+        self.soft_reset(delay_source)?;
 
-        //self.handle_all_messages(delay_source);
+        delay_source.delay_ms(50u8);
+        self.handle_all_messages(delay_source);
+        delay_source.delay_ms(50u8);
+        self.handle_all_messages(delay_source);
+
         //self.eat_all_messages(delay_source);
         //delay_source.delay_ms(50);
         //self.handle_all_messages(delay_source);
@@ -274,9 +283,9 @@ impl<SI, SE> BNO080<SI>
     }
 
 
-    pub fn enable_debugging(&mut self, dbf: DebugFunc) {
-        self.debug_func = Some(dbf);
-    }
+    // pub fn set_debug_log(&mut self, dbglog: &mut impl Printer) {
+    //     unimplemented!()
+    // }
 
     /// Tell the sensor to start reporting the fused rotation vector
     /// on a regular cadence. Note that the maximum valid update rate
@@ -287,6 +296,7 @@ impl<SI, SE> BNO080<SI>
 
     /// Enable a particular report
     fn enable_report(&mut self, report_id: u8, millis_between_reports: u16) -> Result<(), WrapperError<SE>> {
+        hprintln!("enable_report {}", report_id).unwrap();
         let micros_between_reports: u32 = (millis_between_reports as u32) * 1000;
         let cmd_body: [u8; 17] = [
             SHTP_REPORT_SET_FEATURE_COMMAND,
@@ -308,6 +318,7 @@ impl<SI, SE> BNO080<SI>
             0, // MSB sensor-specific config
         ];
 
+        //self.send_and_receive_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
         self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
         Ok(())
     }
@@ -351,14 +362,14 @@ impl<SI, SE> BNO080<SI>
         self.last_packet_len_received = packet_len;
 
 
-        if self.debug_func.is_some() {
-            let blob: u32 =
-                (self.packet_recv_buf[0] as u32).shl(24)
-                + (self.packet_recv_buf[1] as u32).shl(16)
-                + (self.packet_recv_buf[2] as u32).shl(8)
-                + (self.packet_recv_buf[3] as u32);
-            self.debug_func.unwrap()(blob as usize);
-        }
+        // if self.debug_func.is_some() {
+        //     let blob: u32 =
+        //         (self.packet_recv_buf[0] as u32).shl(24)
+        //         + (self.packet_recv_buf[1] as u32).shl(16)
+        //         + (self.packet_recv_buf[2] as u32).shl(8)
+        //         + (self.packet_recv_buf[3] as u32);
+        //     self.debug_func.unwrap()(blob as usize);
+        // }
 
         Ok(packet_len)
     }
@@ -390,27 +401,27 @@ impl<SI, SE> BNO080<SI>
         Ok([0.1, 0.2, 0.3, 0.4])
     }
 
-    pub fn soft_reset(&mut self) -> Result<(), WrapperError<SE>> {
+    pub fn soft_reset(&mut self,  delay_source: &mut impl DelayMs<u8>) -> Result<(), WrapperError<SE>> {
         let data:[u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET]; //reset execute
         // send command packet and ignore received packets
-        self.send_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
+        // self.send_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
+        let _received = self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref(), delay_source);
         Ok(())
     }
 
     /// Send a packet and receive the response
     fn send_and_receive_packet(&mut self, channel: u8, body_data: &[u8], delay_source: &mut impl DelayMs<u8>) ->  Result<usize, WrapperError<SE>> {
-        if !self.sensor_interface.wait_for_data_available(150, delay_source) {
-            self.debug_func.unwrap()(666);
-        }
-        self.send_packet(channel, &body_data)?;
-        self.sensor_interface.wait_for_data_available(150, delay_source);
-        let recv_packet_length = self.sensor_interface.read_packet(&mut self.packet_recv_buf).map_err(WrapperError::CommError)?;
+        //self.send_packet(channel, &body_data)?;
+        //self.sensor_interface.wait_for_data_available(150, delay_source);
+        //let recv_packet_length = self.sensor_interface.read_packet(&mut self.packet_recv_buf).map_err(WrapperError::CommError)?;
 
-        //let send_packet_length = self.prep_send_packet(channel, body_data);
-        // let recv_packet_length = self.sensor_interface.send_and_receive_packet(
-        //     &self.packet_send_buf[..send_packet_length].as_ref(),
-        //     &mut self.packet_recv_buf,
-        //     delay_source).map_err(WrapperError::CommError)?;
+        let send_packet_length = self.prep_send_packet(channel, body_data);
+        let recv_packet_length = self.sensor_interface
+            .send_and_receive_packet(
+                &self.packet_send_buf[..send_packet_length].as_ref(),
+                &mut self.packet_recv_buf,
+                delay_source)
+            .map_err(WrapperError::CommError)?;
         Ok(recv_packet_length)
     }
 }

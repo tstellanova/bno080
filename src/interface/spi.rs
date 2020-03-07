@@ -3,9 +3,10 @@
 use embedded_hal;
 
 use super::{SensorInterface};
-use crate::interface::{PACKET_HEADER_LENGTH, SensorCommon, DebugFunc};
+use crate::interface::{PACKET_HEADER_LENGTH, SensorCommon};
 use embedded_hal::digital::v2::{OutputPin, InputPin};
 use embedded_hal::blocking::delay::DelayMs;
+use core::fmt::Write;
 
 use crate::Error;
 
@@ -21,7 +22,6 @@ pub struct SpiInterface<SPI, CSN, IN, WAK, RSTN> {
     waken: WAK,
     reset: RSTN,
     received_packet_count: usize,
-    debug_func: Option<DebugFunc>,
 }
 
 impl<SPI, CSN, IN, WAK, RSTN, CommE, PinE> SpiInterface<SPI, CSN, IN, WAK, RSTN>
@@ -41,7 +41,6 @@ impl<SPI, CSN, IN, WAK, RSTN, CommE, PinE> SpiInterface<SPI, CSN, IN, WAK, RSTN>
             waken,
             reset,
             received_packet_count: 0,
-            debug_func: None,
         }
     }
 
@@ -104,7 +103,10 @@ impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, C
         Ok(())
         //Err(Error::SensorUnresponsive)
     }
-
+    //
+    // fn set_debug_log(&mut self, dbglog: &mut impl Write) {
+    //     unimplemented!()
+    // }
     /// return true if the sensor is ready to provide data
     fn wait_for_data_available(&mut self, max_ms: u8, delay_source: &mut impl DelayMs<u8>) -> bool {
         for _i in 0..max_ms {
@@ -160,12 +162,6 @@ impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, C
         Ok(packet_len)
 
     }
-
-
-    fn enable_debugging(&mut self, dbf: DebugFunc) {
-        self.debug_func = Some(dbf);
-    }
-
 
     fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
         self.csn.set_low().map_err(Error::Pin)?;

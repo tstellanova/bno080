@@ -2,7 +2,9 @@
 use super::{SensorInterface, SensorCommon, PACKET_HEADER_LENGTH};
 use crate::Error;
 use embedded_hal::blocking::delay::DelayMs;
-use crate::interface::DebugFunc;
+
+#[cfg(debug_assertions)]
+use cortex_m_semihosting::{hprintln};
 
 /// the i2c address normally used by BNO080
 pub const DEFAULT_ADDRESS: u8 =  0x4A;
@@ -31,7 +33,8 @@ pub struct I2cInterface<I2C> {
 impl<I2C, CommE> I2cInterface<I2C>
     where
         I2C:  embedded_hal::blocking::i2c::Write<Error = CommE> +
-        embedded_hal::blocking::i2c::Read<Error = CommE>
+        embedded_hal::blocking::i2c::Read<Error = CommE> +
+        embedded_hal::blocking::i2c::WriteRead<Error = CommE>
 {
     pub fn new(i2c: I2C, addr: u8) -> Self {
         Self {
@@ -43,6 +46,7 @@ impl<I2C, CommE> I2cInterface<I2C>
     }
 
     fn read_packet_header(&mut self) -> Result<(), Error<CommE, ()>> {
+        //hprintln!("r {:x} {}", self.address, PACKET_HEADER_LENGTH).unwrap();
         self.seg_recv_buf[0] = 0;
         self.seg_recv_buf[1] = 0;
         self.i2c_port.read(self.address, &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH]).map_err(Error::Comm)?;
@@ -54,6 +58,7 @@ impl<I2C, CommE> I2cInterface<I2C>
                          total_packet_len: usize,
                          packet_recv_buf: &mut [u8]
     ) -> Result<usize, Error<CommE, ()>> {
+
         //iprintln!("sized: {}", total_packet_len).unwrap();
         let mut remaining_body_len: usize = total_packet_len - PACKET_HEADER_LENGTH;
         let mut already_read_len: usize = 0;
@@ -63,6 +68,7 @@ impl<I2C, CommE> I2cInterface<I2C>
 
         if total_packet_len < MAX_SEGMENT_READ {
             if total_packet_len > 0 {
+                hprintln!("r {:x} {}", self.address, total_packet_len).unwrap();
                 self.i2c_port
                     .read(self.address, &mut packet_recv_buf[..total_packet_len])
                     .map_err(Error::Comm)?;
@@ -77,10 +83,10 @@ impl<I2C, CommE> I2cInterface<I2C>
                     if whole_segment_length > MAX_SEGMENT_READ { MAX_SEGMENT_READ }
                     else { whole_segment_length };
 
+                hprintln!("r {:x} {}", self.address, segment_read_len).unwrap();
                 self.seg_recv_buf[0] = 0;
                 self.seg_recv_buf[1] = 0;
                 self.i2c_port.read(self.address, &mut self.seg_recv_buf[..segment_read_len]).map_err(Error::Comm)?;
-                //let packet_declared_len = Self::parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
 
                 //if we've never read any segments, transcribe the first packet header;
                 //otherwise, just transcribe the segment body (no header)
@@ -92,7 +98,6 @@ impl<I2C, CommE> I2cInterface<I2C>
 
                 let body_read_len = segment_read_len - PACKET_HEADER_LENGTH;
                 remaining_body_len -= body_read_len;
-
             }
         }
 
@@ -104,13 +109,16 @@ impl<I2C, CommE> I2cInterface<I2C>
 impl<I2C, CommE> SensorInterface for I2cInterface<I2C>
     where
         I2C: embedded_hal::blocking::i2c::Write<Error = CommE> +
-        embedded_hal::blocking::i2c::Read<Error = CommE>
+        embedded_hal::blocking::i2c::Read<Error = CommE> +
+        embedded_hal::blocking::i2c::WriteRead<Error = CommE>
+
 {
     type SensorError = Error<CommE, ()>;
 
     fn setup(&mut self, _delay_source: &mut impl DelayMs<u8>) -> Result<(), Self::SensorError> {
        Ok(())
     }
+
 
     fn wait_for_data_available(&mut self, _max_ms: u8, _delay_source: &mut impl DelayMs<u8>) -> bool {
         let rc = self.read_packet_header();
@@ -122,8 +130,10 @@ impl<I2C, CommE> SensorInterface for I2cInterface<I2C>
     }
 
     fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
-        self.i2c_port.write(self.address,
-                            &packet).map_err(Error::Comm)?;
+        hprintln!("w {:x} {}",self.address,packet.len()).unwrap();
+        self.i2c_port
+            .write(self.address,&packet)
+            .map_err(Error::Comm)?;
         Ok(())
     }
 
@@ -148,17 +158,32 @@ impl<I2C, CommE> SensorInterface for I2cInterface<I2C>
     }
 
 
-    fn send_and_receive_packet(&mut self, _send_buf: &[u8],
-                               _recv_buf: &mut [u8],
+    fn send_and_receive_packet(&mut self, send_buf: &[u8],
+                               recv_buf: &mut [u8],
                                _delay_source: &mut impl DelayMs<u8>)
         -> Result<usize,  Self::SensorError> {
-        unimplemented!()
+        //TODO zero receive buffer?
+        hprintln!("wr {:x} {} {}",self.address, send_buf.len(), PACKET_HEADER_LENGTH).unwrap();
+        self.i2c_port
+            .write_read(self.address,send_buf, &mut recv_buf[..PACKET_HEADER_LENGTH])
+            .map_err(Error::Comm)?;
+
+        let packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
+        let received_len =
+            if packet_len > PACKET_HEADER_LENGTH {
+                self.read_sized_packet(packet_len,  recv_buf)?
+            }
+            else {
+                packet_len
+            };
+        if  packet_len > 0 {
+            self.received_packet_count += 1;
+        }
+
+        Ok(received_len)
     }
 
 
-    fn enable_debugging(&mut self, _dbf: DebugFunc) {
-        unimplemented!();
-    }
 
 
 }

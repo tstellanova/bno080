@@ -9,9 +9,6 @@ use core::ops::{Shl};
 use embedded_hal::blocking::delay::DelayMs;
 
 
-pub type DebugFunc = fn(usize);
-
-
 
 /// A method of communicating with the sensor
 pub trait SensorInterface {
@@ -29,11 +26,13 @@ pub trait SensorInterface {
     fn read_packet(&mut self, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError>;
 
     /// Send a packet and receive the response immediately
-    fn send_and_receive_packet(&mut self, send_buf: &[u8], recv_buf: &mut [u8],  delay_source: &mut impl DelayMs<u8>) -> Result<usize,  Self::SensorError>;
+    fn send_and_receive_packet(&mut self, send_buf: &[u8], recv_buf: &mut [u8], delay_source: &mut impl DelayMs<u8>) -> Result<usize,  Self::SensorError>;
 
     fn wait_for_data_available(&mut self, max_ms: u8, delay_source: &mut impl DelayMs<u8>) -> bool;
 
-    fn enable_debugging(&mut self, dbf: DebugFunc);
+
+    // Provide a debugging output log
+    // fn set_debug_log(&mut self, dbglog: &mut impl Write);
 }
 
 pub use self::i2c::I2cInterface;
