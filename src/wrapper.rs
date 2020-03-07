@@ -381,6 +381,15 @@ impl<SI, SE> BNO080<SI>
 
     }
 
+    /// Read normalized quaternion
+    /// QX normalized quaternion – X, or Heading | range: 0.0 – 1.0 ( ±π )
+    /// QY normalized quaternion – Y, or Pitch   | range: 0.0 – 1.0 ( ±π/2 )
+    /// QZ normalized quaternion – Z, or Roll    | range: 0.0 – 1.0 ( ±π )
+    /// QW normalized quaternion – W, or 0.0     | range: 0.0 – 1.0
+    pub fn read_quaternion(&mut self) ->  Result<[f32; 4], WrapperError<SE>> {
+        Ok([0.1, 0.2, 0.3, 0.4])
+    }
+
     pub fn soft_reset(&mut self) -> Result<(), WrapperError<SE>> {
         let data:[u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET]; //reset execute
         // send command packet and ignore received packets
