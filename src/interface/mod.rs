@@ -8,6 +8,7 @@ use core::ops::{Shl};
 
 use embedded_hal::blocking::delay::DelayMs;
 
+use cortex_m_semihosting::{hprintln};
 
 
 /// A method of communicating with the sensor
@@ -60,9 +61,13 @@ impl SensorCommon {
         //maximum packet length is ... < 32767 ?
         let raw_pack_len: u16 = (packet[0] as u16)
             + ((packet[1] as u16)  & CONTINUATION_FLAG_CLEAR).shl(8);
-        let packet_len: usize =
-            if raw_pack_len < 32767 { raw_pack_len as usize }
-            else { 0 };
+        hprintln!("rph: {:?} {}", &packet[..PACKET_HEADER_LENGTH], raw_pack_len).unwrap();
+
+        let mut packet_len: usize = raw_pack_len as usize;
+        if packet_len >= 32767 {
+            // we sometimes get garbage packets of
+            packet_len = PACKET_HEADER_LENGTH;
+        }
 
         //let is_continuation:bool = (packet[1] & 0x80) != 0;
         //let chan_num =  packet[2];

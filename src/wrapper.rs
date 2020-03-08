@@ -91,20 +91,13 @@ impl<SI, SE> BNO080<SI>
         SI: SensorInterface<SensorError = SE>,
         SE: core::fmt::Debug
 {
-    /// Receive and ignore one message
-    pub fn eat_one_message(&mut self) -> usize {
-        let res = self.receive_packet();
-        res.unwrap_or(0)
-    }
 
     /// Consume all available messages on the port without processing them
     pub fn eat_all_messages(&mut self, delay: &mut impl DelayMs<u8>) {
-        let mut miss_count = 0;
-        while miss_count < 10 {
-            let received_len = self.eat_one_message();
-            if received_len == 0 {
-                miss_count += 1;
-                delay.delay_ms(2);
+        loop {
+            let msg_count = self.eat_one_message();
+            if msg_count == 0 {
+                break;
             } else {
                 //give some time to other parts of the system
                 delay.delay_ms(1);
@@ -137,12 +130,33 @@ impl<SI, SE> BNO080<SI>
             }
         }
         else {
-            hprintln!("recv err {:?}", res).unwrap();
+            hprintln!("handle1 err {:?}", res).unwrap();
         }
 
         msg_count
     }
 
+    /// Receive and ignore one message,
+    /// returning the size of the packet received or zero
+    /// if there was no packet to read.
+    pub fn eat_one_message(&mut self) -> usize {
+        let mut msg_count = 0;
+
+        let res = self.receive_packet();
+        if res.is_ok() {
+            let received_len = res.unwrap_or(0);
+            if received_len > 0 {
+                let msg = self.packet_recv_buf;
+                hprintln!("eat [{:x},{:x},{:x},{:x}[", msg[0], msg[1], msg[2], msg[3]).unwrap();
+                msg_count += 1;
+            }
+        }
+        else {
+            hprintln!("eat1 err {:?}", res).unwrap();
+        }
+
+        msg_count
+    }
 
     fn handle_advertise_response(&mut self, received_len: usize) {
         let payload_len = received_len - PACKET_HEADER_LENGTH;
@@ -202,7 +216,6 @@ impl<SI, SE> BNO080<SI>
 
         self.last_chan_received = chan_num;
         match chan_num {
-
             CHANNEL_COMMAND => {
                 match report_id {
                     CMD_RESP_ADVERTISEMENT => {
@@ -256,7 +269,7 @@ impl<SI, SE> BNO080<SI>
             },
             _ => {
                 self.last_chan_received = chan_num;
-                hprintln!("unh chan {:x}", chan_num).unwrap();
+                hprintln!("unh chan [{:x},{:x},{:x},{:x}[", msg[0], msg[1], msg[2], msg[3]).unwrap();
             }
         }
 
@@ -267,22 +280,17 @@ impl<SI, SE> BNO080<SI>
     pub fn init(&mut self, delay_source: &mut impl DelayMs<u8>) -> Result<(), WrapperError<SE>> {
         //Section 5.1.1.1 : On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
-
         self.sensor_interface.setup( delay_source).map_err(WrapperError::CommError)?;
-        //self.eat_all_messages(delay_source);
         self.soft_reset(delay_source)?;
+        hprintln!("wait 100").unwrap();
         delay_source.delay_ms(100u8);
-        self.handle_all_messages(delay_source);
-
+        //self.handle_all_messages(delay_source);
+        //  self.eat_one_message();
         // delay_source.delay_ms(100u8);
-        // self.handle_all_messages(delay_source);
-        //
-        // //self.eat_all_messages(delay_source);
-        // //delay_source.delay_ms(50);
-        // //self.handle_all_messages(delay_source);
-        //
-        // self.verify_product_id(delay_source)?;
+        //bkpt();
+        self.eat_all_messages(delay_source);
 
+        self.verify_product_id(delay_source)?;
         Ok(())
     }
 
@@ -331,7 +339,6 @@ impl<SI, SE> BNO080<SI>
     fn prep_send_packet(&mut self, channel: u8, body_data: &[u8]) -> usize {
         let body_len = body_data.len();
 
-        self.sequence_numbers[channel as usize] += 1;
         let packet_length = body_len + PACKET_HEADER_LENGTH;
         let packet_header = [
             (packet_length & 0xFF) as u8, //LSB
@@ -339,6 +346,7 @@ impl<SI, SE> BNO080<SI>
             channel,
             self.sequence_numbers[channel as usize]
         ];
+        self.sequence_numbers[channel as usize] += 1;
 
         self.packet_send_buf[..PACKET_HEADER_LENGTH].copy_from_slice(packet_header.as_ref());
         self.packet_send_buf[PACKET_HEADER_LENGTH..packet_length].copy_from_slice(body_data);
@@ -407,7 +415,8 @@ impl<SI, SE> BNO080<SI>
     pub fn soft_reset(&mut self,  delay_source: &mut impl DelayMs<u8>) -> Result<(), WrapperError<SE>> {
         let data:[u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET]; //reset execute
         // send command packet and ignore received packets
-        let _received = self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref(), delay_source)?;
+        //self.send_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
+        let _ = self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref(), delay_source)?;
         Ok(())
     }
 
