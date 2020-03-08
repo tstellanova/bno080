@@ -6,7 +6,7 @@ use super::{SensorInterface};
 use crate::interface::{PACKET_HEADER_LENGTH, SensorCommon};
 use embedded_hal::digital::v2::{OutputPin, InputPin};
 use embedded_hal::blocking::delay::DelayMs;
-use core::fmt::Write;
+// use core::fmt::Write;
 
 use crate::Error;
 

@@ -5,12 +5,11 @@ use embedded_hal::{
     blocking::delay::{ DelayMs},
 };
 
-use core::ops::{Shl, Shr};
-// use core::fmt::Write;
+use core::ops::{Shr};
 use cortex_m::asm::bkpt;
 
-#[cfg(debug_assertions)]
-use cortex_m_semihosting::{hprint, hprintln};
+//#[cfg(debug_assertions)]
+use cortex_m_semihosting::{hprintln};
 
 const PACKET_SEND_BUF_LEN: usize = 256;
 const PACKET_RECV_BUF_LEN: usize = 1024;
@@ -90,6 +89,7 @@ impl<SI> BNO080<SI> {
 impl<SI, SE> BNO080<SI>
     where
         SI: SensorInterface<SensorError = SE>,
+        SE: core::fmt::Debug
 {
     /// Receive and ignore one message
     pub fn eat_one_message(&mut self) -> usize {
@@ -98,7 +98,7 @@ impl<SI, SE> BNO080<SI>
     }
 
     /// Consume all available messages on the port without processing them
-    pub fn eat_all_messages(&mut self, delay: &mut dyn DelayMs<u8>) {
+    pub fn eat_all_messages(&mut self, delay: &mut impl DelayMs<u8>) {
         let mut miss_count = 0;
         while miss_count < 10 {
             let received_len = self.eat_one_message();
@@ -135,6 +135,9 @@ impl<SI, SE> BNO080<SI>
                 msg_count += 1;
                 self.handle_received_packet(received_len);
             }
+        }
+        else {
+            hprintln!("recv err {:?}", res).unwrap();
         }
 
         msg_count
@@ -266,18 +269,19 @@ impl<SI, SE> BNO080<SI>
         // its full advertisement response, unsolicited, to the host.
 
         self.sensor_interface.setup( delay_source).map_err(WrapperError::CommError)?;
-        self.soft_reset(delay_source)?;
-
-        delay_source.delay_ms(50u8);
-        self.handle_all_messages(delay_source);
-        delay_source.delay_ms(50u8);
-        self.handle_all_messages(delay_source);
-
         //self.eat_all_messages(delay_source);
-        //delay_source.delay_ms(50);
-        //self.handle_all_messages(delay_source);
-        
-        self.verify_product_id(delay_source)?;
+        self.soft_reset(delay_source)?;
+        delay_source.delay_ms(100u8);
+        self.handle_all_messages(delay_source);
+
+        // delay_source.delay_ms(100u8);
+        // self.handle_all_messages(delay_source);
+        //
+        // //self.eat_all_messages(delay_source);
+        // //delay_source.delay_ms(50);
+        // //self.handle_all_messages(delay_source);
+        //
+        // self.verify_product_id(delay_source)?;
 
         Ok(())
     }
@@ -351,10 +355,9 @@ impl<SI, SE> BNO080<SI>
     }
 
     /// Read one packet into the receive buffer
-    pub fn receive_packet(&mut self) -> Result<usize, WrapperError<SE>> {
+    pub fn receive_packet(&mut self) -> Result<usize, WrapperError<SE> > {
         self.packet_recv_buf[0] = 0;
         self.packet_recv_buf[1] = 0;
-        
         let packet_len = self.sensor_interface
             .read_packet(&mut self.packet_recv_buf)
             .map_err(WrapperError::CommError)?;
@@ -374,7 +377,7 @@ impl<SI, SE> BNO080<SI>
         Ok(packet_len)
     }
 
-    fn verify_product_id(&mut self, delay_source: &mut impl DelayMs<u8>) -> Result<(), WrapperError<SE> > {
+    pub fn verify_product_id(&mut self, delay_source: &mut impl DelayMs<u8>) -> Result<(), WrapperError<SE> > {
         let cmd_body: [u8; 2] = [
             SENSORHUB_PROD_ID_REQ, //request product ID
             0, //reserved
@@ -404,17 +407,12 @@ impl<SI, SE> BNO080<SI>
     pub fn soft_reset(&mut self,  delay_source: &mut impl DelayMs<u8>) -> Result<(), WrapperError<SE>> {
         let data:[u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET]; //reset execute
         // send command packet and ignore received packets
-        // self.send_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
-        let _received = self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref(), delay_source);
+        let _received = self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref(), delay_source)?;
         Ok(())
     }
 
     /// Send a packet and receive the response
     fn send_and_receive_packet(&mut self, channel: u8, body_data: &[u8], delay_source: &mut impl DelayMs<u8>) ->  Result<usize, WrapperError<SE>> {
-        //self.send_packet(channel, &body_data)?;
-        //self.sensor_interface.wait_for_data_available(150, delay_source);
-        //let recv_packet_length = self.sensor_interface.read_packet(&mut self.packet_recv_buf).map_err(WrapperError::CommError)?;
-
         let send_packet_length = self.prep_send_packet(channel, body_data);
         let recv_packet_length = self.sensor_interface
             .send_and_receive_packet(
@@ -422,6 +420,7 @@ impl<SI, SE> BNO080<SI>
                 &mut self.packet_recv_buf,
                 delay_source)
             .map_err(WrapperError::CommError)?;
+        hprintln!("srecv {} {}", send_packet_length, recv_packet_length).unwrap();
         Ok(recv_packet_length)
     }
 }

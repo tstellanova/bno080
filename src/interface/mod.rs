@@ -57,10 +57,12 @@ impl SensorCommon {
             return 0;
         }
         //Bits 14:0 are used to indicate the total number of bytes in the body plus header
-        //maximum packet length is ... 32767?
+        //maximum packet length is ... < 32767 ?
         let raw_pack_len: u16 = (packet[0] as u16)
             + ((packet[1] as u16)  & CONTINUATION_FLAG_CLEAR).shl(8);
-        let packet_len: usize = raw_pack_len as usize;
+        let packet_len: usize =
+            if raw_pack_len < 32767 { raw_pack_len as usize }
+            else { 0 };
 
         //let is_continuation:bool = (packet[1] & 0x80) != 0;
         //let chan_num =  packet[2];

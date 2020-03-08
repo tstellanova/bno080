@@ -46,10 +46,11 @@ impl<I2C, CommE> I2cInterface<I2C>
     }
 
     fn read_packet_header(&mut self) -> Result<(), Error<CommE, ()>> {
-        //hprintln!("r {:x} {}", self.address, PACKET_HEADER_LENGTH).unwrap();
         self.seg_recv_buf[0] = 0;
         self.seg_recv_buf[1] = 0;
-        self.i2c_port.read(self.address, &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH]).map_err(Error::Comm)?;
+        self.i2c_port
+            .read(self.address, &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH])
+            .map_err(Error::Comm)?;
         Ok(())
     }
 
@@ -141,6 +142,7 @@ impl<I2C, CommE> SensorInterface for I2cInterface<I2C>
     fn read_packet(&mut self, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError> {
         self.read_packet_header()?;
         let packet_len = SensorCommon::parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
+        hprintln!("pav {}",  packet_len).unwrap();
 
         let received_len =
             if packet_len > PACKET_HEADER_LENGTH {
@@ -169,6 +171,8 @@ impl<I2C, CommE> SensorInterface for I2cInterface<I2C>
             .map_err(Error::Comm)?;
 
         let packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
+        hprintln!("pln {}", packet_len).unwrap();
+
         let received_len =
             if packet_len > PACKET_HEADER_LENGTH {
                 self.read_sized_packet(packet_len,  recv_buf)?
