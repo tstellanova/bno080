@@ -44,7 +44,7 @@ pub use self::mock_i2c_port::FakeI2cPort;
 
 
 pub(crate) const PACKET_HEADER_LENGTH: usize = 4;
-
+pub(crate) const MAX_CARGO_DATA_LENGTH: usize = 32766 - PACKET_HEADER_LENGTH;
 
 struct SensorCommon {
 
@@ -58,21 +58,21 @@ impl SensorCommon {
             return 0;
         }
         //Bits 14:0 are used to indicate the total number of bytes in the body plus header
-        //maximum packet length is ... < 32767 ?
+        //maximum packet length is ... PACKET_HEADER_LENGTH
         let raw_pack_len: u16 = (packet[0] as u16)
             + ((packet[1] as u16)  & CONTINUATION_FLAG_CLEAR).shl(8);
-        hprintln!("rph: {:?} {}", &packet[..PACKET_HEADER_LENGTH], raw_pack_len).unwrap();
 
         let mut packet_len: usize = raw_pack_len as usize;
-        if packet_len >= 32767 {
-            // we sometimes get garbage packets of
-            packet_len = PACKET_HEADER_LENGTH;
+        if packet_len > MAX_CARGO_DATA_LENGTH {
+            // we sometimes get garbage packets of [0xFF, 0xFF, 0xFF, 0xFF]
+            packet_len = 0; //PACKET_HEADER_LENGTH;
         }
+
+        hprintln!("pph: {:?} {} -> {}", &packet[..PACKET_HEADER_LENGTH], raw_pack_len, packet_len).unwrap();
 
         //let is_continuation:bool = (packet[1] & 0x80) != 0;
         //let chan_num =  packet[2];
         //let seq_num =  packet[3];
-
         packet_len
     }
 }

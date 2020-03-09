@@ -18,14 +18,12 @@ const NUM_CHANNELS: usize = 6;
 
 #[derive(Debug)]
 pub enum WrapperError<E> {
-
+    ///Communications error
     CommError(E),
-
     /// Invalid chip ID was read
     InvalidChipId(u8),
     /// Unsupported sensor firmware version
     InvalidFWVersion(u8),
-
     /// We expected some data but didn't receive any
     NoDataAvailable,
 }
@@ -147,7 +145,7 @@ impl<SI, SE> BNO080<SI>
             let received_len = res.unwrap_or(0);
             if received_len > 0 {
                 let msg = self.packet_recv_buf;
-                hprintln!("eat [{:x},{:x},{:x},{:x}[", msg[0], msg[1], msg[2], msg[3]).unwrap();
+                hprintln!("eat [0x{:x}, 0x{:x}, 0x{:x}, 0x{:x}]", msg[0], msg[1], msg[2], msg[3]).unwrap();
                 msg_count += 1;
             }
         }
@@ -281,14 +279,12 @@ impl<SI, SE> BNO080<SI>
         //Section 5.1.1.1 : On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
         self.sensor_interface.setup( delay_source).map_err(WrapperError::CommError)?;
+        //self.eat_all_messages(delay_source);
+        delay_source.delay_ms(1u8);
         self.soft_reset(delay_source)?;
         hprintln!("wait 100").unwrap();
         delay_source.delay_ms(100u8);
-        //self.handle_all_messages(delay_source);
-        //  self.eat_one_message();
-        // delay_source.delay_ms(100u8);
-        //bkpt();
-        self.eat_all_messages(delay_source);
+       self.eat_all_messages(delay_source);
 
         self.verify_product_id(delay_source)?;
         Ok(())
@@ -372,16 +368,6 @@ impl<SI, SE> BNO080<SI>
 
         self.last_packet_len_received = packet_len;
 
-
-        // if self.debug_func.is_some() {
-        //     let blob: u32 =
-        //         (self.packet_recv_buf[0] as u32).shl(24)
-        //         + (self.packet_recv_buf[1] as u32).shl(16)
-        //         + (self.packet_recv_buf[2] as u32).shl(8)
-        //         + (self.packet_recv_buf[3] as u32);
-        //     self.debug_func.unwrap()(blob as usize);
-        // }
-
         Ok(packet_len)
     }
 
@@ -392,7 +378,7 @@ impl<SI, SE> BNO080<SI>
         ];
 
         let recv_len = self.send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref(), delay_source)?;
-        if recv_len > 0 {
+        if recv_len > PACKET_HEADER_LENGTH {
             self.handle_received_packet(recv_len);
         }
 
@@ -416,7 +402,9 @@ impl<SI, SE> BNO080<SI>
         let data:[u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET]; //reset execute
         // send command packet and ignore received packets
         //self.send_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
-        let _ = self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref(), delay_source)?;
+        //bkpt();
+        //self.receive_packet()?;
+        self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref(), delay_source)?;
         Ok(())
     }
 
