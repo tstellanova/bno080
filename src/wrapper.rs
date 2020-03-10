@@ -1,3 +1,8 @@
+/*
+Copyright (c) 2020 Todd Stellanova
+LICENSE: BSD3 (see LICENSE file)
+*/
+
 use crate::interface::{
     SensorInterface,
     PACKET_HEADER_LENGTH};
@@ -6,10 +11,13 @@ use embedded_hal::{
 };
 
 use core::ops::{Shr};
-use cortex_m::asm::bkpt;
+// use cortex_m::asm::bkpt;
 
-//#[cfg(debug_assertions)]
+#[cfg(debug_assertions)]
 use cortex_m_semihosting::{hprintln};
+
+use cast::{f32};
+
 
 const PACKET_SEND_BUF_LEN: usize = 256;
 const PACKET_RECV_BUF_LEN: usize = 1024;
@@ -58,14 +66,9 @@ pub struct BNO080<SI> {
     last_command_chan_rid: u8,
     last_control_chan_rid: u8,
 
-    /// Raw quaternion (rotation vector)
-    raw_quat_i: u16,
-    raw_quat_j: u16,
-    raw_quat_k: u16,
-    raw_quat_real: u16,
-    raw_quat_acc_rad: u16,
-
+    /// Rotation vector as unit quaternion
     rotation_quaternion: [f32; 4],
+    /// Heading accuracy of rotation vector (radians)
     rot_quaternion_acc: f32,
 
 }
@@ -90,11 +93,6 @@ impl<SI> BNO080<SI> {
             last_exec_chan_rid: 0,
             last_command_chan_rid: 0,
             last_control_chan_rid: 0,
-            raw_quat_i: 0,
-            raw_quat_j: 0,
-            raw_quat_k: 0,
-            raw_quat_real: 0,
-            raw_quat_acc_rad: 0,
             rotation_quaternion: [0.0 ; 4],
             rot_quaternion_acc: 0.0
         }
@@ -189,93 +187,110 @@ impl<SI, SE> BNO080<SI>
         self.advert_received = true;
     }
 
-    // Sensor input reports have the form:
-    // [u8; 5]  timestamp in microseconds
+    fn handle_one_input_report( outer_cursor: usize, msg: &[u8])
+        ->  (usize, u8,  i16, i16, i16, i16, i16) {
+   // (inner_cursor: usize, report_id, data1, data2, data3, data4, data5) {
+        let mut cursor = outer_cursor;
+        let remaining = msg.len() - cursor;
+
+        let feature_report_id = msg[cursor];
+        cursor += 1;
+        let _rep_seq_num = msg[cursor];
+        cursor += 1;
+        let _rep_status = msg[cursor];//actually partially delay
+        cursor += 1;
+        let _delay = msg[cursor];
+        cursor += 1;
+
+
+        //	int16_t retval = p[0] | (p[1] << 8);
+        // report_id = event->report[0] ??
+        // value->sequence = event->report[1];
+        // value->status = event->report[2] & 0x03;
+        // delay = ((pReport[2] & 0xFC) << 6) + pReport[3];
+        // value->un.rotationVector.i = read16(&event->report[4]) * SCALE_Q(14);
+        // value->un.rotationVector.j = read16(&event->report[6]) * SCALE_Q(14);
+        // value->un.rotationVector.k = read16(&event->report[8]) * SCALE_Q(14);
+        // value->un.rotationVector.real = read16(&event->report[10]) * SCALE_Q(14);
+        // value->un.rotationVector.accuracy = read16(&event->report[12]) * SCALE_Q(12);
+
+        let data1: i16 = (msg[cursor] as i16) | ((msg[cursor + 1] as i16) << 8);
+        cursor += 2;
+        let data2: i16 = (msg[cursor] as i16) | ((msg[cursor + 1] as i16) << 8);
+        cursor += 2;
+        let data3: i16 = (msg[cursor] as i16) | ((msg[cursor + 1] as i16) << 8);
+        cursor += 2;
+        let data4: i16 =
+            if remaining > 14 {
+                let val: i16 = (msg[cursor] as i16) | ((msg[cursor + 1] as i16) << 8);
+                cursor += 2;
+                val
+            } else { 0 };
+        let data5: i16 =
+            if remaining > 16 {
+                let val: i16 = (msg[cursor] as i16) | ((msg[cursor + 1] as i16) << 8);
+                cursor += 2;
+                val
+            } else { 0 };
+
+        (cursor, feature_report_id, data1, data2, data3, data4, data5)
+
+    }
+
+    // Sensor input packets have the form:
+    // [u8; 5]  timestamp in microseconds for the packet?
+    // a sequence of n reports, each with four byte header
     // u8 report ID
     // u8 sequence number of report
-    // ?? follows: about 5 * 2 bytes for eg rotation vec
     fn handle_input_report(&mut self, received_len: usize) {
-        let msg = &self.packet_recv_buf[..received_len];
-        let mut cursor: usize = PACKET_HEADER_LENGTH; //skip header
-        let data_len = received_len - PACKET_HEADER_LENGTH;
-
-        if data_len < 9 {
-            hprintln!("bad report: {:?}",msg).unwrap();
+        let mut outer_cursor: usize = PACKET_HEADER_LENGTH + 5; //skip header, timestamp
+        //TODO need to skip more above for a payload-level timestamp??
+        let payload_len = received_len - outer_cursor;
+        if payload_len < 14 {
+            hprintln!("bad report: {:?}",&self.packet_recv_buf[..PACKET_HEADER_LENGTH]).unwrap();
         }
 
-        cursor += 5; // skip timestamp (usecs since reading was collected)
-        let feature_report_id = msg[cursor]; cursor+=1;
-        let rep_seq_num = msg[cursor]; cursor+=1;
-        let rep_status = msg[cursor] & 0x03; cursor+=1;
+        // there may be multiple reports per payload
+        while outer_cursor < payload_len {
+            let start_cursor = outer_cursor;
+            let (inner_cursor, report_id, data1, data2, data3, data4, data5) =
+                Self::handle_one_input_report(outer_cursor, &self.packet_recv_buf[..received_len]);
+            outer_cursor = inner_cursor;
 
-        let data1: u16 = (msg[cursor] as u16) + (msg[cursor+1] as u16) << 8; cursor += 2;
-        let data2: u16 = (msg[cursor] as u16) + (msg[cursor+1] as u16) << 8; cursor += 2;
-        let data3: u16 = (msg[cursor] as u16) + (msg[cursor+1] as u16) << 8; cursor += 2;
-        let data4: u16 =
-            if data_len > 14 {
-                let val = (msg[cursor] as u16) + (msg[cursor+1] as u16) << 8;
-                cursor += 2;
-                val
-            }
-            else { 0 };
-        let data5: u16 =
-            if data_len > 16 {
-                let val = (msg[cursor] as u16) + (msg[cursor+1] as u16) << 8;
-                cursor += 2;
-                val
-            }
-            else { 0 };
-
-        //TODO what about multiple reports per packet??
-
-        match feature_report_id {
-            SENSOR_REPORTID_ROTATION_VECTOR => {
-                hprintln!("rotv {}", received_len).unwrap();
-                self.update_rotation_quaternion(data1, data2, data3, data4, data5);
-            },
-            _ => {
-                //hprintln!("unhin: 0x{:X} ", feature_report_id).unwrap();
-                hprintln!("unhin: {:?} 0x{:X} {} ", &msg[..PACKET_HEADER_LENGTH+1], feature_report_id, received_len).unwrap();
-
+            match report_id {
+                SENSOR_REPORTID_ROTATION_VECTOR => {
+                    self.update_rotation_quaternion(data1, data2, data3, data4, data5);
+                },
+                _ => {
+                    hprintln!("unhin: 0x{:X} {:?}  ", report_id, &self.packet_recv_buf[start_cursor..start_cursor+5]).unwrap();
+                }
             }
         }
     }
 
-    /// Q format number conversion constants Qm.n
-    /// Q1.14 ?
-    const Q1_VAL_ROTATION_VECTOR: u16 = 14;
-    /// Q1.8 ?
-    const Q1_VAL_ACCELEROMETER: u16 = 8;
-    /// Q1.8 ?
-    const Q1_VAL_LINEAR_ACCELEROMETER: u16 = 8;
-    /// Q1.9 ?
-    const Q_VAL_GYRO: u16 = 9;
-    /// Q1.4 ?
-    const Q1_VAL_MAGNETOMETER: u16 = 4;
 
-    /// Convert fixed point values sent by sensor into float values
-    /// Inputs are in "Q format"
-    /// TODO this is not the correct rust implementation
-    /// TODO add tests to verify
-    fn q1_fixed_to_float(fixed_point: u16, qpoint: u8) -> f32 {
-        let signed_val = fixed_point as i16;
-        let float_val:f32 = (signed_val as f32) * 2u16.pow( - qpoint);
-        float_val
-    }
-
-    /// Given a set of quaternion values
-    /// in the Q-fixed-point format,
+    /// Given a set of quaternion values in the Q-fixed-point format,
     /// calculate and update the corresponding float values
-    fn update_rotation_quaternion(&mut self, q_i: u16, q_j: u16, q_k:u16, q_real: u16, q_acc: u16) {
+    fn update_rotation_quaternion(&mut self, q_i: i16, q_j: i16, q_k:i16, q_r: i16, q_a: i16) {
+        hprintln!("rquat {} {} {} {} {}", q_i, q_j, q_k, q_r, q_a).unwrap();
+        // first cast the integers into fixed point (infallible)
+        let qq_i =  fpa::I2F14(q_i).unwrap(); // Q point 14 for unit quaternion values
+        let qq_j =  fpa::I2F14(q_j).unwrap();
+        let qq_k =  fpa::I2F14(q_k).unwrap();
+        let qq_r =  fpa::I2F14(q_r).unwrap();
+        let qq_a =  fpa::I4F12(q_a).unwrap(); // Q point 12 for accuracy (radians)
 
+        // then cast the fixed point numbers into floats (infallible)
         self.rotation_quaternion = [
-            Self.q1_fixed_to_float(q_i, Self.Q1_VAL_ROTATION_VECTOR),
-            Self.q1_fixed_to_float(q_j, Self.Q1_VAL_ROTATION_VECTOR),
-            Self.q1_fixed_to_float(q_k, Self.Q1_VAL_ROTATION_VECTOR),
-            Self.q1_fixed_to_float(q_real, Self.Q1_VAL_ROTATION_VECTOR),
+            f32(qq_i),
+            f32(qq_j),
+            f32(qq_k),
+            f32(qq_r),
         ];
 
-        self.rot_quaternion_acc = Self.q1_fixed_to_float(q_acc, Self.Q1_VAL_ROTATION_VECTOR);
+        self.rot_quaternion_acc = f32(qq_a);
+        hprintln!("quat {:?} {:.2}", self.rotation_quaternion, self.rot_quaternion_acc).unwrap();
+
     }
 
     fn handle_error_list(&mut self, received_len: usize) {
@@ -540,13 +555,22 @@ const SENSORHUB_PROD_ID_RESP: u8 =  0xF8;
 const SHTP_REPORT_SET_FEATURE_COMMAND: u8 = 0xFD;
 
 
-// Unused Report IDs:
-// 0x01 accelerometer
-// 0x02 gyroscope
-// 0x03 mag field
-// 0x04 linear accel
+/// Report IDs from SH2 Reference Manual:
+// 0x01 accelerometer (m/s^2 including gravity): Q point 8
+// 0x02 gyroscope calibrated (rad/s): Q point 9
+// 0x03 mag field calibrated (uTesla): Q point 4
+// 0x04 linear acceleration (m/s^2 minus gravity): Q point 8
+/// Unit quaternion rotation vector, Q point 12, with heading accuracy estimate (radians)
 const SENSOR_REPORTID_ROTATION_VECTOR: u8 = 0x05;
-// const SENSOR_REPORTID_GRAVITY: u8 = 0x06;
+// const SENSOR_REPORTID_GRAVITY: u8 = 0x06; // Q point 8
+// 0x08 game rotation vector : Q point 14
+// 0x09 geomagnetic rotation vector: Q point 14 for quaternion, Q point 12 for heading accuracy
+// 0x0A pressure (hectopascals) from external baro: Q point 20
+// 0x0B ambient light (lux) from external sensor: Q point 8
+// 0x0C humidity (percent) from external sensor: Q point 8
+// 0x0D proximity (centimeters) from external sensor: Q point 4
+// 0x0E temperature (degrees C) from external sensor: Q point 7
+
 
 // Report ID = 0xFB (Timebase Reference)
 

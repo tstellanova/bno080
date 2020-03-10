@@ -6,7 +6,7 @@ use embedded_hal::blocking::delay::DelayMs;
 #[cfg(debug_assertions)]
 use cortex_m_semihosting::{hprintln};
 
-use cortex_m::asm::bkpt;
+// use cortex_m::asm::bkpt;
 
 /// the i2c address normally used by BNO080
 pub const DEFAULT_ADDRESS: u8 =  0x4A;

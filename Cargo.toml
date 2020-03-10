@@ -21,6 +21,11 @@ readme = "README.md"
 cortex-m = "^0.6.0"
 cortex-m-semihosting = "0.3.5"
 cortex-m-log = { version = "0.6.1", features = ["log-integration", "itm", "semihosting"] }
+fpa = "0.1.0"
+cast = { version = "0.2.3", default-features=false }
+
+
+
 
 
 [dependencies.embedded-hal]

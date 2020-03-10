@@ -1,6 +1,6 @@
 /*
 Copyright (c) 2020 Todd Stellanova
-LICENSE: See LICENSE file
+LICENSE: BSD3 (see LICENSE file)
 */
 
 #![no_std]

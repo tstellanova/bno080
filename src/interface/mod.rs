@@ -68,7 +68,7 @@ impl SensorCommon {
             packet_len = 0; //PACKET_HEADER_LENGTH;
         }
 
-        if 0 == packet_len {
+        if 0 == packet_len && 0 != raw_pack_len {
             hprintln!("pph: {:?} {} -> {}", &packet[..PACKET_HEADER_LENGTH], raw_pack_len, packet_len).unwrap();
         }
         else {
