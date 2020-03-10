@@ -83,7 +83,7 @@ impl<I2C, CommE> I2cInterface<I2C>
                 self.i2c_port
                     .read(self.address, &mut packet_recv_buf[..total_packet_len])
                     .map_err(Error::Comm)?;
-                hprintln!("r.p: {:?}", &packet_recv_buf[..PACKET_HEADER_LENGTH]).unwrap();
+                //hprintln!("r.p: {:?}", &packet_recv_buf[..PACKET_HEADER_LENGTH]).unwrap();
                 already_read_len = total_packet_len;
             }
         }
@@ -176,7 +176,7 @@ impl<I2C, CommE> SensorInterface for I2cInterface<I2C>
 
         if  packet_len > 0 {
             self.received_packet_count += 1;
-            let _ = SensorCommon::parse_packet_header(&recv_buf[..packet_len]);
+            //let _ = SensorCommon::parse_packet_header(&recv_buf[..packet_len]);
         }
 
         Ok(received_len)
@@ -198,7 +198,7 @@ impl<I2C, CommE> SensorInterface for I2cInterface<I2C>
             .map_err(Error::Comm)?;
 
         let packet_len = SensorCommon::parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
-        hprintln!("pln {}", packet_len).unwrap();
+        //hprintln!("wrpln {}", packet_len).unwrap();
 
         let received_len =
             if packet_len > PACKET_HEADER_LENGTH {

@@ -58,6 +58,16 @@ pub struct BNO080<SI> {
     last_command_chan_rid: u8,
     last_control_chan_rid: u8,
 
+    /// Raw quaternion (rotation vector)
+    raw_quat_i: u16,
+    raw_quat_j: u16,
+    raw_quat_k: u16,
+    raw_quat_real: u16,
+    raw_quat_acc_rad: u16,
+
+    rotation_quaternion: [f32; 4],
+    rot_quaternion_acc: f32,
+
 }
 
 
@@ -80,6 +90,13 @@ impl<SI> BNO080<SI> {
             last_exec_chan_rid: 0,
             last_command_chan_rid: 0,
             last_control_chan_rid: 0,
+            raw_quat_i: 0,
+            raw_quat_j: 0,
+            raw_quat_k: 0,
+            raw_quat_real: 0,
+            raw_quat_acc_rad: 0,
+            rotation_quaternion: [0.0 ; 4],
+            rot_quaternion_acc: 0.0
         }
     }
 }
@@ -179,19 +196,86 @@ impl<SI, SE> BNO080<SI>
     // ?? follows: about 5 * 2 bytes for eg rotation vec
     fn handle_input_report(&mut self, received_len: usize) {
         let msg = &self.packet_recv_buf[..received_len];
-        let mut cursor = PACKET_HEADER_LENGTH; //skip header
-        cursor += 5; // skip timestamp
-        let feature_report_id = msg[cursor];
-        //cursor += 1;
+        let mut cursor: usize = PACKET_HEADER_LENGTH; //skip header
+        let data_len = received_len - PACKET_HEADER_LENGTH;
+
+        if data_len < 9 {
+            hprintln!("bad report: {:?}",msg).unwrap();
+        }
+
+        cursor += 5; // skip timestamp (usecs since reading was collected)
+        let feature_report_id = msg[cursor]; cursor+=1;
+        let rep_seq_num = msg[cursor]; cursor+=1;
+        let rep_status = msg[cursor] & 0x03; cursor+=1;
+
+        let data1: u16 = (msg[cursor] as u16) + (msg[cursor+1] as u16) << 8; cursor += 2;
+        let data2: u16 = (msg[cursor] as u16) + (msg[cursor+1] as u16) << 8; cursor += 2;
+        let data3: u16 = (msg[cursor] as u16) + (msg[cursor+1] as u16) << 8; cursor += 2;
+        let data4: u16 =
+            if data_len > 14 {
+                let val = (msg[cursor] as u16) + (msg[cursor+1] as u16) << 8;
+                cursor += 2;
+                val
+            }
+            else { 0 };
+        let data5: u16 =
+            if data_len > 16 {
+                let val = (msg[cursor] as u16) + (msg[cursor+1] as u16) << 8;
+                cursor += 2;
+                val
+            }
+            else { 0 };
+
+        //TODO what about multiple reports per packet??
 
         match feature_report_id {
             SENSOR_REPORTID_ROTATION_VECTOR => {
-                hprintln!("rotv").unwrap();
+                hprintln!("rotv {}", received_len).unwrap();
+                self.update_rotation_quaternion(data1, data2, data3, data4, data5);
             },
             _ => {
-                hprintln!("unhin[{}]: {:x} ", received_len, feature_report_id).unwrap();
+                //hprintln!("unhin: 0x{:X} ", feature_report_id).unwrap();
+                hprintln!("unhin: {:?} 0x{:X} {} ", &msg[..PACKET_HEADER_LENGTH+1], feature_report_id, received_len).unwrap();
+
             }
         }
+    }
+
+    /// Q format number conversion constants Qm.n
+    /// Q1.14 ?
+    const Q1_VAL_ROTATION_VECTOR: u16 = 14;
+    /// Q1.8 ?
+    const Q1_VAL_ACCELEROMETER: u16 = 8;
+    /// Q1.8 ?
+    const Q1_VAL_LINEAR_ACCELEROMETER: u16 = 8;
+    /// Q1.9 ?
+    const Q_VAL_GYRO: u16 = 9;
+    /// Q1.4 ?
+    const Q1_VAL_MAGNETOMETER: u16 = 4;
+
+    /// Convert fixed point values sent by sensor into float values
+    /// Inputs are in "Q format"
+    /// TODO this is not the correct rust implementation
+    /// TODO add tests to verify
+    fn q1_fixed_to_float(fixed_point: u16, qpoint: u8) -> f32 {
+        let signed_val = fixed_point as i16;
+        let float_val:f32 = (signed_val as f32) * 2u16.pow( - qpoint);
+        float_val
+    }
+
+    /// Given a set of quaternion values
+    /// in the Q-fixed-point format,
+    /// calculate and update the corresponding float values
+    fn update_rotation_quaternion(&mut self, q_i: u16, q_j: u16, q_k:u16, q_real: u16, q_acc: u16) {
+
+        self.rotation_quaternion = [
+            Self.q1_fixed_to_float(q_i, Self.Q1_VAL_ROTATION_VECTOR),
+            Self.q1_fixed_to_float(q_j, Self.Q1_VAL_ROTATION_VECTOR),
+            Self.q1_fixed_to_float(q_k, Self.Q1_VAL_ROTATION_VECTOR),
+            Self.q1_fixed_to_float(q_real, Self.Q1_VAL_ROTATION_VECTOR),
+        ];
+
+        self.rot_quaternion_acc = Self.q1_fixed_to_float(q_acc, Self.Q1_VAL_ROTATION_VECTOR);
     }
 
     fn handle_error_list(&mut self, received_len: usize) {
@@ -210,7 +294,8 @@ impl<SI, SE> BNO080<SI>
         let msg = &self.packet_recv_buf[..received_len];
         let chan_num =  msg[2];
         //let _seq_num =  msg[3];
-        let report_id: u8 = msg[4];
+        let report_id: u8 =
+            if received_len > PACKET_HEADER_LENGTH {  msg[4] } else { 0 };
 
         self.last_chan_received = chan_num;
         match chan_num {
@@ -250,7 +335,7 @@ impl<SI, SE> BNO080<SI>
                         else if cmd_resp == SH2_INIT_SYSTEM {
                             self.init_received = true;
                         }
-                        hprintln!("CMD_RESP: {:x}", cmd_resp).unwrap();
+                        hprintln!("CMD_RESP: 0x{:X}", cmd_resp).unwrap();
                     },
                     SENSORHUB_PROD_ID_RESP => { // 0xF8 / 248
                         hprintln!("PID_RESP").unwrap();
@@ -258,7 +343,7 @@ impl<SI, SE> BNO080<SI>
                     },
                     _ =>  {
                         self.last_control_chan_rid = report_id;
-                        hprintln!("unh hbc: {:x}", report_id).unwrap();
+                        hprintln!("unh hbc: 0x{:X}", report_id).unwrap();
                     }
                 }
             },
@@ -267,7 +352,7 @@ impl<SI, SE> BNO080<SI>
             },
             _ => {
                 self.last_chan_received = chan_num;
-                hprintln!("unh chan [{:x},{:x},{:x},{:x}[", msg[0], msg[1], msg[2], msg[3]).unwrap();
+                hprintln!("unh chan 0x{:X}", chan_num).unwrap();
             }
         }
 
@@ -282,9 +367,12 @@ impl<SI, SE> BNO080<SI>
         //self.eat_all_messages(delay_source);
         delay_source.delay_ms(1u8);
         self.soft_reset(delay_source)?;
+        hprintln!("wait 50").unwrap();
+        delay_source.delay_ms(50u8);
+        self.eat_all_messages(delay_source);
         hprintln!("wait 100").unwrap();
         delay_source.delay_ms(100u8);
-       self.eat_all_messages(delay_source);
+        self.eat_all_messages(delay_source);
 
         self.verify_product_id(delay_source)?;
         Ok(())
@@ -304,7 +392,7 @@ impl<SI, SE> BNO080<SI>
 
     /// Enable a particular report
     fn enable_report(&mut self, report_id: u8, millis_between_reports: u16) -> Result<(), WrapperError<SE>> {
-        hprintln!("enable_report {}", report_id).unwrap();
+        hprintln!("enable_report 0x{:X}", report_id).unwrap();
         let micros_between_reports: u32 = (millis_between_reports as u32) * 1000;
         let cmd_body: [u8; 17] = [
             SHTP_REPORT_SET_FEATURE_COMMAND,
@@ -417,7 +505,7 @@ impl<SI, SE> BNO080<SI>
                 &mut self.packet_recv_buf,
                 delay_source)
             .map_err(WrapperError::CommError)?;
-        hprintln!("srecv {} {}", send_packet_length, recv_packet_length).unwrap();
+        //hprintln!("srecv {} {}", send_packet_length, recv_packet_length).unwrap();
         Ok(recv_packet_length)
     }
 }
@@ -443,13 +531,24 @@ const CMD_RESP_ADVERTISEMENT: u8 = 0;
 const CMD_RESP_ERROR_LIST: u8 = 1;
 
 /// SHTP constants
+
+/// Report ID for Product ID request
 const SENSORHUB_PROD_ID_REQ: u8 = 0xF9;
+/// Report ID for Product ID response
 const SENSORHUB_PROD_ID_RESP: u8 =  0xF8;
 
 const SHTP_REPORT_SET_FEATURE_COMMAND: u8 = 0xFD;
 
-const SENSOR_REPORTID_ROTATION_VECTOR: u8 = 0x05;
 
+// Unused Report IDs:
+// 0x01 accelerometer
+// 0x02 gyroscope
+// 0x03 mag field
+// 0x04 linear accel
+const SENSOR_REPORTID_ROTATION_VECTOR: u8 = 0x05;
+// const SENSOR_REPORTID_GRAVITY: u8 = 0x06;
+
+// Report ID = 0xFB (Timebase Reference)
 
 /// requests
 //const SENSORHUB_COMMAND_REQ:u8 =  0xF2;
