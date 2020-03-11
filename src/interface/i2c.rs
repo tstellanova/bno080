@@ -143,14 +143,15 @@ impl<I2C, CommE> SensorInterface for I2cInterface<I2C>
     }
 
 
-    fn wait_for_data_available(&mut self, _max_ms: u8, _delay_source: &mut impl DelayMs<u8>) -> bool {
-        let rc = self.read_packet_header();
-        if rc.is_err() {
-            return false;
-        }
-        let packet_len = SensorCommon::parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
-        packet_len > 0
-    }
+
+    // fn wait_for_data_available(&mut self, _max_ms: u8, _delay_source: &mut impl DelayMs<u8>) -> bool {
+    //     let rc = self.read_packet_header();
+    //     if rc.is_err() {
+    //         return false;
+    //     }
+    //     let packet_len = SensorCommon::parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
+    //     packet_len > 0
+    // }
 
     fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
         hprintln!("w {:x} {}",self.address,packet.len()).unwrap();
@@ -184,8 +185,7 @@ impl<I2C, CommE> SensorInterface for I2cInterface<I2C>
 
 
     fn send_and_receive_packet(&mut self, send_buf: &[u8],
-                               recv_buf: &mut [u8],
-                               _delay_source: &mut impl DelayMs<u8>)
+                               recv_buf: &mut [u8])
         -> Result<usize,  Self::SensorError> {
         // zero packet header receive buffer
         for byte in &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH] {

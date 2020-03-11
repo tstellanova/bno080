@@ -54,8 +54,19 @@ impl<SPI, CSN, IN, WAK, RSTN, CommE, PinE> SpiInterface<SPI, CSN, IN, WAK, RSTN>
         self.wait_for_data_available(250, delay_source)
     }
 
-/// read the body ("cargo") of a packet,
-/// return the total packet length read
+    /// return true if the sensor is ready to provide data
+    fn wait_for_data_available(&mut self, max_ms: u8, delay_source: &mut impl DelayMs<u8>) -> bool {
+        for _i in 0..max_ms {
+            if self.sensor_ready() {
+                return true;
+            }
+            delay_source.delay_ms(1);
+        }
+        false
+    }
+
+    /// read the body ("cargo" or "payload") of a packet,
+    /// return the total packet length read
     fn read_packet_cargo(&mut self, recv_buf: &mut [u8]) -> usize  {
         let mut packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
         // now get the body
@@ -107,18 +118,9 @@ impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, C
     // fn set_debug_log(&mut self, dbglog: &mut impl Write) {
     //     unimplemented!()
     // }
-    /// return true if the sensor is ready to provide data
-    fn wait_for_data_available(&mut self, max_ms: u8, delay_source: &mut impl DelayMs<u8>) -> bool {
-        for _i in 0..max_ms {
-            if self.sensor_ready() {
-                return true;
-            }
-            delay_source.delay_ms(1);
-        }
-        false
-    }
 
-    fn send_and_receive_packet(&mut self, send_buf: &[u8], recv_buf: &mut [u8], delay_source: &mut impl DelayMs<u8>)
+
+    fn send_and_receive_packet(&mut self, send_buf: &[u8], recv_buf: &mut [u8])
         -> Result<usize,  Self::SensorError> {
 
         //ensure that the first header bytes are zeroed since we're not sending any data
@@ -136,9 +138,8 @@ impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, C
             return Err(rc.unwrap_err());
         }
 
-        
-        if !self.wait_for_data_available(50, delay_source) {
-            self.csn.set_high().map_err(Error::Pin)?;
+        if !self.sensor_ready() {
+            //no packet to be read
             return Ok(0)
         }
 

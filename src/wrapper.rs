@@ -16,8 +16,6 @@ use core::ops::{Shr};
 #[cfg(debug_assertions)]
 use cortex_m_semihosting::{hprintln};
 
-use cast::{f32};
-
 
 const PACKET_SEND_BUF_LEN: usize = 256;
 const PACKET_RECV_BUF_LEN: usize = 1024;
@@ -160,7 +158,8 @@ impl<SI, SE> BNO080<SI>
             let received_len = res.unwrap_or(0);
             if received_len > 0 {
                 let msg = self.packet_recv_buf;
-                hprintln!("eat [0x{:x}, 0x{:x}, 0x{:x}, 0x{:x}]", msg[0], msg[1], msg[2], msg[3]).unwrap();
+                hprintln!("eat {}", received_len).unwrap();
+                // hprintln!("eat [0x{:x}, 0x{:x}, 0x{:x}, 0x{:x}]", msg[0], msg[1], msg[2], msg[3]).unwrap();
                 msg_count += 1;
             }
         }
@@ -189,7 +188,6 @@ impl<SI, SE> BNO080<SI>
 
     fn handle_one_input_report( outer_cursor: usize, msg: &[u8])
         ->  (usize, u8,  i16, i16, i16, i16, i16) {
-   // (inner_cursor: usize, report_id, data1, data2, data3, data4, data5) {
         let mut cursor = outer_cursor;
         let remaining = msg.len() - cursor;
 
@@ -243,6 +241,7 @@ impl<SI, SE> BNO080<SI>
     // u8 report ID
     // u8 sequence number of report
     fn handle_input_report(&mut self, received_len: usize) {
+        let mut report_count = 0;
         let mut outer_cursor: usize = PACKET_HEADER_LENGTH + 5; //skip header, timestamp
         //TODO need to skip more above for a payload-level timestamp??
         let payload_len = received_len - outer_cursor;
@@ -256,16 +255,20 @@ impl<SI, SE> BNO080<SI>
             let (inner_cursor, report_id, data1, data2, data3, data4, data5) =
                 Self::handle_one_input_report(outer_cursor, &self.packet_recv_buf[..received_len]);
             outer_cursor = inner_cursor;
-
+            report_count += 1;
             match report_id {
                 SENSOR_REPORTID_ROTATION_VECTOR => {
+                    //hprintln!("rotv").unwrap();
                     self.update_rotation_quaternion(data1, data2, data3, data4, data5);
                 },
                 _ => {
-                    hprintln!("unhin: 0x{:X} {:?}  ", report_id, &self.packet_recv_buf[start_cursor..start_cursor+5]).unwrap();
+                    hprintln!("unhin: 0x{:X}",report_id).unwrap();
+                    // hprintln!("unhin: 0x{:X} {:?}  ", report_id, &self.packet_recv_buf[start_cursor..start_cursor+5]).unwrap();
                 }
             }
         }
+
+        //hprintln!("report_count: {}",report_count).unwrap();
     }
 
 
@@ -273,7 +276,7 @@ impl<SI, SE> BNO080<SI>
     /// Given a set of quaternion values in the Q-fixed-point format,
     /// calculate and update the corresponding float values
     fn update_rotation_quaternion(&mut self, q_i: i16, q_j: i16, q_k:i16, q_r: i16, q_a: i16) {
-        //hprintln!("rquat {} {} {} {} {}", q_i, q_j, q_k, q_r, q_a).unwrap();
+        hprintln!("rquat {} {} {} {} {}", q_i, q_j, q_k, q_r, q_a).unwrap();
         // first cast the integers into fixed point (infallible)
         // let qq_i =  fpa::I2F14(q_i).unwrap(); // Q point 14 for unit quaternion values
         // let qq_j =  fpa::I2F14(q_j).unwrap();
@@ -283,10 +286,10 @@ impl<SI, SE> BNO080<SI>
 
         // then cast the fixed point numbers into floats (infallible)
         self.rotation_quaternion = [
-            quat_q14_to_f32(q_i),
-            quat_q14_to_f32(q_j),
-            quat_q14_to_f32(q_k),
-            quat_q14_to_f32(q_r),
+            q14_to_f32(q_i),
+            q14_to_f32(q_j),
+            q14_to_f32(q_k),
+            q14_to_f32(q_r),
 
             // f32(qq_i),
             // f32(qq_j),
@@ -294,7 +297,7 @@ impl<SI, SE> BNO080<SI>
             // f32(qq_r),
         ];
 
-        self.rot_quaternion_acc = 2.0; //f32(qq_a);
+        self.rot_quaternion_acc = q12_to_f32(q_a);
         //hprintln!("quat {:?} {:.2}", self.rotation_quaternion, self.rot_quaternion_acc).unwrap();
 
     }
@@ -348,7 +351,7 @@ impl<SI, SE> BNO080<SI>
             },
             CHANNEL_HUB_CONTROL => {
                 match report_id {
-                    SENSORHUB_COMMAND_RESP => { // 0xF1 / 241
+                    SHUB_COMMAND_RESP => { // 0xF1 / 241
                         let cmd_resp = msg[6];
                         if cmd_resp == SH2_STARTUP_INIT_UNSOLICITED {
                             self.init_received = true;
@@ -358,13 +361,17 @@ impl<SI, SE> BNO080<SI>
                         }
                         hprintln!("CMD_RESP: 0x{:X}", cmd_resp).unwrap();
                     },
-                    SENSORHUB_PROD_ID_RESP => { // 0xF8 / 248
+                    SHUB_PROD_ID_RESP => { // 0xF8 / 248
                         hprintln!("PID_RESP").unwrap();
                         self.prod_id_verified = true;
                     },
+                    SHUB_GET_FEATURE_RESP => { // 0xFC
+                        let feature_report_id = msg[5];
+                        hprintln!("feat resp: {}", feature_report_id).unwrap();
+                    },
                     _ =>  {
                         self.last_control_chan_rid = report_id;
-                        hprintln!("unh hbc: 0x{:X}", report_id).unwrap();
+                        hprintln!("unh hbc: 0x{:X} {:?}", report_id, &msg[..PACKET_HEADER_LENGTH]).unwrap();
                     }
                 }
             },
@@ -385,17 +392,16 @@ impl<SI, SE> BNO080<SI>
         //Section 5.1.1.1 : On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
         self.sensor_interface.setup( delay_source).map_err(WrapperError::CommError)?;
-        //self.eat_all_messages(delay_source);
         delay_source.delay_ms(1u8);
-        self.soft_reset(delay_source)?;
-        hprintln!("wait 50").unwrap();
+        self.soft_reset()?;
         delay_source.delay_ms(50u8);
         self.eat_all_messages(delay_source);
-        hprintln!("wait 100").unwrap();
         delay_source.delay_ms(100u8);
         self.eat_all_messages(delay_source);
 
-        self.verify_product_id(delay_source)?;
+        self.verify_product_id()?;
+        self.eat_all_messages(delay_source);
+
         Ok(())
     }
 
@@ -416,7 +422,7 @@ impl<SI, SE> BNO080<SI>
         hprintln!("enable_report 0x{:X}", report_id).unwrap();
         let micros_between_reports: u32 = (millis_between_reports as u32) * 1000;
         let cmd_body: [u8; 17] = [
-            SHTP_REPORT_SET_FEATURE_COMMAND,
+            SHUB_REPORT_SET_FEATURE_CMD,
             report_id,
             0, //feature flags
             0, //LSB change sensitivity
@@ -435,8 +441,19 @@ impl<SI, SE> BNO080<SI>
             0, // MSB sensor-specific config
         ];
 
-        //self.send_and_receive_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
+        //we simply blast out this configuration command and assume it'll succeed
         self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
+        // let mut response_len = self.send_and_receive_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
+        // hprintln!("HBC resp1: {}", response_len).unwrap();
+        //
+        // if (!response_len > 0 ) {
+        //     response_len = self.receive_packet()?;
+        //     hprintln!("HBC resp2: {}", response_len).unwrap();
+        // }
+        // if response_len > 0 {
+        //     self.handle_received_packet(response_len);
+        // }
+
         Ok(())
     }
 
@@ -459,7 +476,7 @@ impl<SI, SE> BNO080<SI>
         packet_length
     }
 
-    fn send_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<usize, WrapperError<SE>> {
+    pub fn send_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<usize, WrapperError<SE>> {
         let packet_length = self.prep_send_packet(channel, body_data);
         self.sensor_interface
             .write_packet( &self.packet_send_buf[..packet_length])
@@ -476,17 +493,18 @@ impl<SI, SE> BNO080<SI>
             .map_err(WrapperError::CommError)?;
 
         self.last_packet_len_received = packet_len;
+        //hprintln!("recv {}" , packet_len).unwrap();
 
         Ok(packet_len)
     }
 
-    pub fn verify_product_id(&mut self, delay_source: &mut impl DelayMs<u8>) -> Result<(), WrapperError<SE> > {
+    pub fn verify_product_id(&mut self) -> Result<(), WrapperError<SE> > {
         let cmd_body: [u8; 2] = [
-            SENSORHUB_PROD_ID_REQ, //request product ID
+            SHUB_PROD_ID_REQ, //request product ID
             0, //reserved
         ];
 
-        let recv_len = self.send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref(), delay_source)?;
+        let recv_len = self.send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
         if recv_len > PACKET_HEADER_LENGTH {
             self.handle_received_packet(recv_len);
         }
@@ -503,47 +521,50 @@ impl<SI, SE> BNO080<SI>
     /// QY normalized quaternion – Y, or Pitch   | range: 0.0 – 1.0 ( ±π/2 )
     /// QZ normalized quaternion – Z, or Roll    | range: 0.0 – 1.0 ( ±π )
     /// QW normalized quaternion – W, or 0.0     | range: 0.0 – 1.0
-    pub fn read_quaternion(&mut self) ->  Result<[f32; 4], WrapperError<SE>> {
-        Ok([0.1, 0.2, 0.3, 0.4])
+    pub fn rotation_quaternion(&self) ->  Result<[f32; 4], WrapperError<SE>> {
+        Ok(self.rotation_quaternion)
     }
 
-    pub fn soft_reset(&mut self,  delay_source: &mut impl DelayMs<u8>) -> Result<(), WrapperError<SE>> {
+    pub fn heading_accuracy(&self) -> f32 {
+        self.rot_quaternion_acc
+    }
+
+    pub fn soft_reset(&mut self) -> Result<(), WrapperError<SE>> {
         let data:[u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET]; //reset execute
         // send command packet and ignore received packets
-        //self.send_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
-        //bkpt();
-        //self.receive_packet()?;
-        self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref(), delay_source)?;
+        self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
         Ok(())
     }
 
     /// Send a packet and receive the response
-    fn send_and_receive_packet(&mut self, channel: u8, body_data: &[u8], delay_source: &mut impl DelayMs<u8>) ->  Result<usize, WrapperError<SE>> {
+    fn send_and_receive_packet(&mut self, channel: u8, body_data: &[u8]) ->  Result<usize, WrapperError<SE>> {
         let send_packet_length = self.prep_send_packet(channel, body_data);
         let recv_packet_length = self.sensor_interface
             .send_and_receive_packet(
                 &self.packet_send_buf[..send_packet_length].as_ref(),
-                &mut self.packet_recv_buf,
-                delay_source)
+                &mut self.packet_recv_buf )
             .map_err(WrapperError::CommError)?;
-        //hprintln!("srecv {} {}", send_packet_length, recv_packet_length).unwrap();
+        hprintln!("srecv {} {}", send_packet_length, recv_packet_length).unwrap();
         Ok(recv_packet_length)
     }
 }
 
-const Q14_MULT: f32 = ((1 << 14) as f32);
-fn quat_q14_to_f32(q_i: i16) -> f32 {
-    let mut float_val: f32 = q_i as f32;
-    float_val /= Q14_MULT;
-    // let qq_i =  fpa::I2F14(q_i).unwrap(); // Q point 14 for unit quaternion values
-    // f32(qq_i)
-    float_val
+// #define SCALE_Q(n) (1.0f / (1 << n))
+const Q12_SCALE: f32 = 1.0/((1 << 12) as f32);
+const Q14_SCALE: f32 = 1.0/((1 << 14) as f32);
+
+fn q14_to_f32(q_val: i16) -> f32 {
+    // let qq_val =  fpa::I2F14(q_val).unwrap();
+    // return f32(qq_val)
+    (q_val as f32) * Q14_SCALE
 }
 
 fn f32_to_q14(input: f32) -> i16 {
-    let intermediate = input * Q14_MULT;
-    let retval: i16 = intermediate as i16;
-    retval
+    (input / Q14_SCALE) as i16
+}
+
+fn q12_to_f32(q_val: i16) -> f32 {
+    (q_val as f32) * Q12_SCALE
 }
 
 // The BNO080 supports six communication channels:
@@ -569,11 +590,15 @@ const CMD_RESP_ERROR_LIST: u8 = 1;
 /// SHTP constants
 
 /// Report ID for Product ID request
-const SENSORHUB_PROD_ID_REQ: u8 = 0xF9;
+const SHUB_PROD_ID_REQ: u8 = 0xF9;
 /// Report ID for Product ID response
-const SENSORHUB_PROD_ID_RESP: u8 =  0xF8;
-
-const SHTP_REPORT_SET_FEATURE_COMMAND: u8 = 0xFD;
+const SHUB_PROD_ID_RESP: u8 =  0xF8;
+const SHUB_GET_FEATURE_RESP: u8 = 0xFC;
+const SHUB_REPORT_SET_FEATURE_CMD: u8 = 0xFD;
+// const SHUB_GET_FEATURE_REQ: u8 = 0xFE;
+// const SHUB_FORCE_SENSOR_FLUSH: u8 = 0xF0;
+const SHUB_COMMAND_RESP:u8 = 0xF1;
+//const SHUB_COMMAND_REQ:u8 =  0xF2;
 
 
 /// Report IDs from SH2 Reference Manual:
@@ -593,11 +618,6 @@ const SENSOR_REPORTID_ROTATION_VECTOR: u8 = 0x05;
 // 0x0E temperature (degrees C) from external sensor: Q point 7
 
 
-// Report ID = 0xFB (Timebase Reference)
-
-/// requests
-//const SENSORHUB_COMMAND_REQ:u8 =  0xF2;
-const SENSORHUB_COMMAND_RESP:u8 = 0xF1;
 
 
 /// executable/device channel responses
@@ -619,7 +639,7 @@ const SH2_STARTUP_INIT_UNSOLICITED:u8 = SH2_CMD_INITIALIZE | SH2_INIT_UNSOLICITE
 #[cfg(test)]
 mod tests {
     //use crate::interface::mock_i2c_port::FakeI2cPort;
-    use crate::wrapper::{f32_to_q14, quat_q14_to_f32};
+    use crate::wrapper::{f32_to_q14, q14_to_f32};
 
     //use crate::interface::I2cInterface;
     //use crate::interface::i2c::DEFAULT_ADDRESS;
@@ -628,7 +648,7 @@ mod tests {
     #[test]
     fn test_qval_conversions() {
         let q_val = f32_to_q14(0.5);
-        let float_val = quat_q14_to_f32(q_val);
+        let float_val = q14_to_f32(q_val);
         assert_eq!(float_val, 0.5);
     }
 
