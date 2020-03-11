@@ -269,27 +269,33 @@ impl<SI, SE> BNO080<SI>
     }
 
 
+
     /// Given a set of quaternion values in the Q-fixed-point format,
     /// calculate and update the corresponding float values
     fn update_rotation_quaternion(&mut self, q_i: i16, q_j: i16, q_k:i16, q_r: i16, q_a: i16) {
-        hprintln!("rquat {} {} {} {} {}", q_i, q_j, q_k, q_r, q_a).unwrap();
+        //hprintln!("rquat {} {} {} {} {}", q_i, q_j, q_k, q_r, q_a).unwrap();
         // first cast the integers into fixed point (infallible)
-        let qq_i =  fpa::I2F14(q_i).unwrap(); // Q point 14 for unit quaternion values
-        let qq_j =  fpa::I2F14(q_j).unwrap();
-        let qq_k =  fpa::I2F14(q_k).unwrap();
-        let qq_r =  fpa::I2F14(q_r).unwrap();
-        let qq_a =  fpa::I4F12(q_a).unwrap(); // Q point 12 for accuracy (radians)
+        // let qq_i =  fpa::I2F14(q_i).unwrap(); // Q point 14 for unit quaternion values
+        // let qq_j =  fpa::I2F14(q_j).unwrap();
+        // let qq_k =  fpa::I2F14(q_k).unwrap();
+        // let qq_r =  fpa::I2F14(q_r).unwrap();
+        // let qq_a =  fpa::I4F12(q_a).unwrap(); // Q point 12 for accuracy (radians)
 
         // then cast the fixed point numbers into floats (infallible)
         self.rotation_quaternion = [
-            f32(qq_i),
-            f32(qq_j),
-            f32(qq_k),
-            f32(qq_r),
+            quat_q14_to_f32(q_i),
+            quat_q14_to_f32(q_j),
+            quat_q14_to_f32(q_k),
+            quat_q14_to_f32(q_r),
+
+            // f32(qq_i),
+            // f32(qq_j),
+            // f32(qq_k),
+            // f32(qq_r),
         ];
 
-        self.rot_quaternion_acc = f32(qq_a);
-        hprintln!("quat {:?} {:.2}", self.rotation_quaternion, self.rot_quaternion_acc).unwrap();
+        self.rot_quaternion_acc = 2.0; //f32(qq_a);
+        //hprintln!("quat {:?} {:.2}", self.rotation_quaternion, self.rot_quaternion_acc).unwrap();
 
     }
 
@@ -525,6 +531,21 @@ impl<SI, SE> BNO080<SI>
     }
 }
 
+const Q14_MULT: f32 = ((1 << 14) as f32);
+fn quat_q14_to_f32(q_i: i16) -> f32 {
+    let mut float_val: f32 = q_i as f32;
+    float_val /= Q14_MULT;
+    // let qq_i =  fpa::I2F14(q_i).unwrap(); // Q point 14 for unit quaternion values
+    // f32(qq_i)
+    float_val
+}
+
+fn f32_to_q14(input: f32) -> i16 {
+    let intermediate = input * Q14_MULT;
+    let retval: i16 = intermediate as i16;
+    retval
+}
+
 // The BNO080 supports six communication channels:
 const CHANNEL_COMMAND: u8 = 0; /// the SHTP command channel
 const CHANNEL_EXECUTABLE: u8 = 1; /// executable channel
@@ -597,14 +618,19 @@ const SH2_STARTUP_INIT_UNSOLICITED:u8 = SH2_CMD_INITIALIZE | SH2_INIT_UNSOLICITE
 
 #[cfg(test)]
 mod tests {
-    use crate::interface::mock_i2c_port::FakeI2cPort;
-    use super::BNO080;
-    //use super::*;
+    //use crate::interface::mock_i2c_port::FakeI2cPort;
+    use crate::wrapper::{f32_to_q14, quat_q14_to_f32};
 
-    use crate::interface::I2cInterface;
-    use crate::interface::i2c::DEFAULT_ADDRESS;
+    //use crate::interface::I2cInterface;
+    //use crate::interface::i2c::DEFAULT_ADDRESS;
 
 
+    #[test]
+    fn test_qval_conversions() {
+        let q_val = f32_to_q14(0.5);
+        let float_val = quat_q14_to_f32(q_val);
+        assert_eq!(float_val, 0.5);
+    }
 
 //    #[test]
 //    fn test_receive_unsized_under() {
@@ -645,35 +671,34 @@ mod tests {
         0x07, 0x00, 0x00, 0x00,
     ];
 
-    #[test]
-    fn test_receive_midpack() {
-        let mut mock_i2c_port = FakeI2cPort::new();
+    // #[test]
+    // fn test_receive_midpack() {
+    //     let mut mock_i2c_port = FakeI2cPort::new();
+    //
+    //     let packet = MIDPACK;
+    //     mock_i2c_port.add_available_packet( &packet);
+    //
+    //     let mut shub = BNO080::new_with_interface(
+    //         I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
+    //     let rc = shub.receive_packet();
+    //     assert!(rc.is_ok());
+    // }
 
-        let packet = MIDPACK;
-        mock_i2c_port.add_available_packet( &packet);
-
-        let mut shub = BNO080::new_with_interface(
-            I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
-        let rc = shub.receive_packet();
-        assert!(rc.is_ok());
-    }
-
-
-    #[test]
-    fn test_handle_adv_message() {
-        let mut mock_i2c_port = FakeI2cPort::new();
-
-        //actual startup response packet
-        let raw_packet = ADVERTISING_PACKET_FULL;
-        mock_i2c_port.add_available_packet( &raw_packet);
-
-        let mut shub = BNO080::new_with_interface(
-            I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
-
-        let msg_count = shub.handle_one_message();
-        assert_eq!(msg_count, 1, "wrong msg_count");
-
-    }
+    // #[test]
+    // fn test_handle_adv_message() {
+    //     let mut mock_i2c_port = FakeI2cPort::new();
+    //
+    //     //actual startup response packet
+    //     let raw_packet = ADVERTISING_PACKET_FULL;
+    //     mock_i2c_port.add_available_packet( &raw_packet);
+    //
+    //     let mut shub = BNO080::new_with_interface(
+    //         I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
+    //
+    //     let msg_count = shub.handle_one_message();
+    //     assert_eq!(msg_count, 1, "wrong msg_count");
+    //
+    // }
 
     // Actual advertising packet received from sensor:
     pub const ADVERTISING_PACKET_FULL: [u8; 276] = [
