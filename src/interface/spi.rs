@@ -1,11 +1,9 @@
-
-
 use embedded_hal;
 
-use super::{SensorInterface};
-use crate::interface::{PACKET_HEADER_LENGTH, SensorCommon};
-use embedded_hal::digital::v2::{OutputPin, InputPin};
+use super::SensorInterface;
+use crate::interface::{SensorCommon, PACKET_HEADER_LENGTH};
 use embedded_hal::blocking::delay::DelayMs;
+use embedded_hal::digital::v2::{InputPin, OutputPin};
 // use core::fmt::Write;
 
 use crate::Error;
@@ -25,13 +23,13 @@ pub struct SpiInterface<SPI, CSN, IN, WAK, RSTN> {
 }
 
 impl<SPI, CSN, IN, WAK, RSTN, CommE, PinE> SpiInterface<SPI, CSN, IN, WAK, RSTN>
-    where
-        SPI: embedded_hal::blocking::spi::Write<u8, Error = CommE> +
-        embedded_hal::blocking::spi::Transfer<u8, Error = CommE>,
-        CSN: OutputPin<Error = PinE>,
-        IN: InputPin<Error = PinE>,
-        WAK: OutputPin<Error = PinE>,
-        RSTN: OutputPin<Error = PinE>,
+where
+    SPI: embedded_hal::blocking::spi::Write<u8, Error = CommE>
+        + embedded_hal::blocking::spi::Transfer<u8, Error = CommE>,
+    CSN: OutputPin<Error = PinE>,
+    IN: InputPin<Error = PinE>,
+    WAK: OutputPin<Error = PinE>,
+    RSTN: OutputPin<Error = PinE>,
 {
     pub fn new(spi: SPI, csn: CSN, hintn: IN, waken: WAK, reset: RSTN) -> Self {
         Self {
@@ -44,7 +42,7 @@ impl<SPI, CSN, IN, WAK, RSTN, CommE, PinE> SpiInterface<SPI, CSN, IN, WAK, RSTN>
         }
     }
 
-    fn sensor_ready(&self) ->  bool  {
+    fn sensor_ready(&self) -> bool {
         self.hintn.is_low().unwrap_or(false)
     }
 
@@ -67,7 +65,7 @@ impl<SPI, CSN, IN, WAK, RSTN, CommE, PinE> SpiInterface<SPI, CSN, IN, WAK, RSTN>
 
     /// read the body ("cargo" or "payload") of a packet,
     /// return the total packet length read
-    fn read_packet_cargo(&mut self, recv_buf: &mut [u8]) -> usize  {
+    fn read_packet_cargo(&mut self, recv_buf: &mut [u8]) -> usize {
         let mut packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
         // now get the body
         if (packet_len > PACKET_HEADER_LENGTH) && (packet_len < recv_buf.len()) {
@@ -75,12 +73,13 @@ impl<SPI, CSN, IN, WAK, RSTN, CommE, PinE> SpiInterface<SPI, CSN, IN, WAK, RSTN>
             for w in recv_buf[PACKET_HEADER_LENGTH..packet_len].iter_mut() {
                 *w = 0xFF;
             }
-            let rc = self.spi.transfer( &mut recv_buf[PACKET_HEADER_LENGTH..packet_len]);
+            let rc = self
+                .spi
+                .transfer(&mut recv_buf[PACKET_HEADER_LENGTH..packet_len]);
             if rc.is_err() {
                 packet_len = 0;
             }
-        }
-        else {
+        } else {
             packet_len = 0;
         }
 
@@ -89,13 +88,13 @@ impl<SPI, CSN, IN, WAK, RSTN, CommE, PinE> SpiInterface<SPI, CSN, IN, WAK, RSTN>
 }
 
 impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, CSN, IN, WAK, RS>
-    where
-        SPI: embedded_hal::blocking::spi::Write<u8, Error = CommE> +
-        embedded_hal::blocking::spi::Transfer<u8, Error = CommE>,
-        CSN: OutputPin<Error = PinE>,
-        IN: InputPin<Error = PinE>,
-        WAK: OutputPin<Error = PinE>,
-        RS: OutputPin<Error = PinE>,
+where
+    SPI: embedded_hal::blocking::spi::Write<u8, Error = CommE>
+        + embedded_hal::blocking::spi::Transfer<u8, Error = CommE>,
+    CSN: OutputPin<Error = PinE>,
+    IN: InputPin<Error = PinE>,
+    WAK: OutputPin<Error = PinE>,
+    RS: OutputPin<Error = PinE>,
 {
     type SensorError = Error<CommE, PinE>;
 
@@ -119,10 +118,11 @@ impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, C
     //     unimplemented!()
     // }
 
-
-    fn send_and_receive_packet(&mut self, send_buf: &[u8], recv_buf: &mut [u8])
-        -> Result<usize,  Self::SensorError> {
-
+    fn send_and_receive_packet(
+        &mut self,
+        send_buf: &[u8],
+        recv_buf: &mut [u8],
+    ) -> Result<usize, Self::SensorError> {
         //ensure that the first header bytes are zeroed since we're not sending any data
         for i in recv_buf[..PACKET_HEADER_LENGTH].iter_mut() {
             *i = 0;
@@ -140,11 +140,14 @@ impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, C
 
         if !self.sensor_ready() {
             //no packet to be read
-            return Ok(0)
+            return Ok(0);
         }
 
         // get just the header
-        let rc = self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]).map_err(Error::Comm);
+        let rc = self
+            .spi
+            .transfer(&mut recv_buf[..PACKET_HEADER_LENGTH])
+            .map_err(Error::Comm);
         if rc.is_err() {
             //release the sensor
             self.csn.set_high().map_err(Error::Pin)?;
@@ -156,12 +159,11 @@ impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, C
         //release the sensor
         self.csn.set_high().map_err(Error::Pin)?;
 
-        if  packet_len > 0 {
+        if packet_len > 0 {
             self.received_packet_count += 1;
         }
 
         Ok(packet_len)
-
     }
 
     fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
@@ -179,7 +181,7 @@ impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, C
     fn read_packet(&mut self, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError> {
         //detect whether the sensor is ready to send data
         if !self.sensor_ready() {
-            return Ok(0)
+            return Ok(0);
         }
 
         //ensure that the first header bytes are zeroed since we're not sending any data
@@ -190,8 +192,10 @@ impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, C
         // grab this sensor
         self.csn.set_low().map_err(Error::Pin)?;
         // get just the header
-        let rc = self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]).map_err(Error::Comm);
-
+        let rc = self
+            .spi
+            .transfer(&mut recv_buf[..PACKET_HEADER_LENGTH])
+            .map_err(Error::Comm);
 
         if rc.is_err() {
             //release the sensor
@@ -204,12 +208,10 @@ impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, C
         //release the sensor
         self.csn.set_high().map_err(Error::Pin)?;
 
-        if  packet_len > 0 {
+        if packet_len > 0 {
             self.received_packet_count += 1;
         }
 
         Ok(packet_len)
     }
 }
-
-

@@ -1,15 +1,14 @@
 pub mod i2c;
 pub mod spi;
 
-// #[cfg(test)]
-// pub mod mock_i2c_port;
+#[cfg(test)]
+pub mod mock_i2c_port;
 
-use core::ops::{Shl};
+use core::ops::Shl;
 
 use embedded_hal::blocking::delay::DelayMs;
 
-use cortex_m_semihosting::{hprintln};
-
+use crate::debug_println;
 
 /// A method of communicating with the sensor
 pub trait SensorInterface {
@@ -17,7 +16,7 @@ pub trait SensorInterface {
     type SensorError;
 
     /// give the sensor interface a chance to set up
-    fn setup(&mut self, delay_source: &mut impl DelayMs<u8> ) -> Result<(), Self::SensorError>;
+    fn setup(&mut self, delay_source: &mut impl DelayMs<u8>) -> Result<(), Self::SensorError>;
 
     /// Write the whole packet provided
     fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError>;
@@ -27,8 +26,11 @@ pub trait SensorInterface {
     fn read_packet(&mut self, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError>;
 
     /// Send a packet and receive the response immediately
-    fn send_and_receive_packet(&mut self, send_buf: &[u8], recv_buf: &mut [u8]) -> Result<usize,  Self::SensorError>;
-
+    fn send_and_receive_packet(
+        &mut self,
+        send_buf: &[u8],
+        recv_buf: &mut [u8],
+    ) -> Result<usize, Self::SensorError>;
 }
 
 pub use self::i2c::I2cInterface;
@@ -36,14 +38,12 @@ pub use self::spi::SpiInterface;
 
 // #[cfg(test)]
 // pub use self::mock_i2c_port::FakeI2cPort;
-//
+
 
 pub(crate) const PACKET_HEADER_LENGTH: usize = 4;
 pub(crate) const MAX_CARGO_DATA_LENGTH: usize = 32766 - PACKET_HEADER_LENGTH;
 
-struct SensorCommon {
-
-}
+struct SensorCommon {}
 
 impl SensorCommon {
     fn parse_packet_header(packet: &[u8]) -> usize {
@@ -54,8 +54,8 @@ impl SensorCommon {
         }
         //Bits 14:0 are used to indicate the total number of bytes in the body plus header
         //maximum packet length is ... PACKET_HEADER_LENGTH
-        let raw_pack_len: u16 = (packet[0] as u16)
-            + ((packet[1] as u16)  & CONTINUATION_FLAG_CLEAR).shl(8);
+        let raw_pack_len: u16 =
+            (packet[0] as u16) + ((packet[1] as u16) & CONTINUATION_FLAG_CLEAR).shl(8);
 
         let mut packet_len: usize = raw_pack_len as usize;
         if packet_len > MAX_CARGO_DATA_LENGTH {
@@ -64,10 +64,14 @@ impl SensorCommon {
         }
 
         if 0 == packet_len && 0 != raw_pack_len {
-            hprintln!("pph: {:?} {} -> {}", &packet[..PACKET_HEADER_LENGTH], raw_pack_len, packet_len).unwrap();
-        }
-        else {
-           // hprintln!("pph: {:?} {} ", &packet[..PACKET_HEADER_LENGTH], packet_len).unwrap();
+            debug_println!(
+                "pph: {:?} {} -> {}",
+                &packet[..PACKET_HEADER_LENGTH],
+                raw_pack_len,
+                packet_len
+            );
+        } else {
+            // hprintln!("pph: {:?} {} ", &packet[..PACKET_HEADER_LENGTH], packet_len).unwrap();
         }
 
         //let is_continuation:bool = (packet[1] & 0x80) != 0;
@@ -80,7 +84,7 @@ impl SensorCommon {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::ops::{Shr};
+    use core::ops::Shr;
 
     #[test]
     fn test_parse_packet_header() {
@@ -93,7 +97,7 @@ mod tests {
             (long_packet_len & 0xFF) as u8,
             long_packet_len.shr(8) as u8,
             0,
-            0
+            0,
         ];
         let size = SensorCommon::parse_packet_header(&raw_packet);
         assert_eq!(size, long_packet_len, "verify > 255 packet length");
@@ -108,7 +112,7 @@ mod tests {
             (short_packet_len & 0xFF) as u8,
             short_packet_len.shr(8) as u8,
             0,
-            0
+            0,
         ];
         let size = SensorCommon::parse_packet_header(&raw_packet);
         assert_eq!(size, short_packet_len, "verify short packet");
@@ -118,22 +122,12 @@ mod tests {
         assert_eq!(size, short_packet_len, "verify short packet continuation");
 
         // first (uncontinued) packet
-        raw_packet = [
-            20 as u8,
-            1 as u8,
-            0,
-            0
-        ];
+        raw_packet = [20 as u8, 1 as u8, 0, 0];
         let size = SensorCommon::parse_packet_header(&raw_packet);
         assert_eq!(size, 276, "verify > 255 packet length");
 
         //from actual received packet
-        raw_packet = [
-            19 as u8,
-            129 as u8,
-            0,
-            1
-        ];
+        raw_packet = [19 as u8, 129 as u8, 0, 1];
         let size = SensorCommon::parse_packet_header(&raw_packet);
         assert_eq!(size, 275, "verify > 255 packet length");
     }

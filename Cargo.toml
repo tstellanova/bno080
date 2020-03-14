@@ -3,8 +3,9 @@ name = "bno080"
 version = "0.1.0"
 authors = ["Todd Stellanova <tstellanova@users.noreply.github.com>"]
 edition = "2018"
-description = "BNO080 driver"
-
+description = "BNO080 AHRS driver"
+license = "BSD-3-Clause"
+repository = "https://github.com/tstellanova/bno080"
 categories = [
     "embedded",
     "hardware-support",
@@ -13,18 +14,17 @@ categories = [
 keywords = [
     "embedded-hal-driver",
     "bno080",
+    "ahrs",
+    "imu"
 ]
-license-file = "LICENSE"
 readme = "README.md"
 
 [dependencies]
 cortex-m = "^0.6.0"
-cortex-m-semihosting = "0.3.5"
 cortex-m-log = { version = "0.6.1", features = ["log-integration", "itm", "semihosting"] }
+embedded-hal = { version = "0.2.2", features = ["unproven"] }
+cortex-m-semihosting = "0.3.5"
 
 
-[dependencies.embedded-hal]
-version = "0.2.2"
-features = ["unproven"]
 
 
