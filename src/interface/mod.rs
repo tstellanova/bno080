@@ -36,10 +36,6 @@ pub trait SensorInterface {
 pub use self::i2c::I2cInterface;
 pub use self::spi::SpiInterface;
 
-// #[cfg(test)]
-// pub use self::mock_i2c_port::FakeI2cPort;
-
-
 pub(crate) const PACKET_HEADER_LENGTH: usize = 4;
 pub(crate) const MAX_CARGO_DATA_LENGTH: usize = 32766 - PACKET_HEADER_LENGTH;
 

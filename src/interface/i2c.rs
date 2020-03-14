@@ -258,6 +258,20 @@ mod tests {
         assert_eq!(next_packet_size, packet.len(), "wrong length");
     }
 
+    //TODO test failing due to bug in mock_i2c_port
+    // #[test]
+    // fn test_receive_under() {
+    //     let mut mock_i2c_port = FakeI2cPort::new();
+    //
+    //     let packet: [u8; 3] = [0; 3];
+    //     mock_i2c_port.add_available_packet(&packet);
+    //
+    //     let mut shub = BNO080::new_with_interface(
+    //         I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
+    //     let rc = shub.receive_packet();
+    //
+    //     assert!(rc.is_err());
+    // }
 
     // Actual advertising packet received from sensor:
     pub const ADVERTISING_PACKET_FULL: [u8; 276] = [
