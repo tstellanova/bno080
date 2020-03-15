@@ -380,10 +380,6 @@ where
         Ok(())
     }
 
-    // pub fn set_debug_log(&mut self, dbglog: &mut impl Printer) {
-    //     unimplemented!()
-    // }
-
     /// Tell the sensor to start reporting the fused rotation vector
     /// on a regular cadence. Note that the maximum valid update rate
     /// is 1 kHz, based on the max update rate of the sensor's gyros.

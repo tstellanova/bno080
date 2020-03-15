@@ -111,12 +111,7 @@ where
         self.wait_for_sensor_ready(delay_source);
 
         Ok(())
-        //Err(Error::SensorUnresponsive)
     }
-    //
-    // fn set_debug_log(&mut self, dbglog: &mut impl Write) {
-    //     unimplemented!()
-    // }
 
     fn send_and_receive_packet(
         &mut self,
