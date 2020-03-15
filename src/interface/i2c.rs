@@ -209,18 +209,19 @@ where
             send_buf.len(),
             PACKET_HEADER_LENGTH
         );
-        //bkpt();
+
         self.i2c_port
-            .write_read(
-                self.address,
-                send_buf,
-                &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH],
-            )
+            .write(self.address, send_buf)
             .map_err(Error::Comm)?;
+        self.i2c_port
+            .read(self.address, &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH])
+            .map_err(Error::Comm)?;
+
+        // Cannot use write_read with bno080,
+        // because it does not support repeated start with i2c.
 
         let packet_len =
             SensorCommon::parse_packet_header(&self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
-        //hprintln!("wrpln {}", packet_len).unwrap();
 
         let received_len = if packet_len > PACKET_HEADER_LENGTH {
             self.read_sized_packet(packet_len, recv_buf)?
