@@ -16,14 +16,20 @@ pub trait SensorInterface {
     type SensorError;
 
     /// give the sensor interface a chance to set up
-    fn setup(&mut self, delay_source: &mut impl DelayMs<u8>) -> Result<(), Self::SensorError>;
+    fn setup(
+        &mut self,
+        delay_source: &mut impl DelayMs<u8>,
+    ) -> Result<(), Self::SensorError>;
 
     /// Write the whole packet provided
     fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError>;
 
     /// Read the next packet from the sensor
     /// Returns the size of the packet read (up to the size of the slice provided)
-    fn read_packet(&mut self, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError>;
+    fn read_packet(
+        &mut self,
+        recv_buf: &mut [u8],
+    ) -> Result<usize, Self::SensorError>;
 
     /// Send a packet and receive the response immediately
     fn send_and_receive_packet(
@@ -50,8 +56,8 @@ impl SensorCommon {
         }
         //Bits 14:0 are used to indicate the total number of bytes in the body plus header
         //maximum packet length is ... PACKET_HEADER_LENGTH
-        let raw_pack_len: u16 =
-            (packet[0] as u16) + ((packet[1] as u16) & CONTINUATION_FLAG_CLEAR).shl(8);
+        let raw_pack_len: u16 = (packet[0] as u16)
+            + ((packet[1] as u16) & CONTINUATION_FLAG_CLEAR).shl(8);
 
         let mut packet_len: usize = raw_pack_len as usize;
         if packet_len > MAX_CARGO_DATA_LENGTH {

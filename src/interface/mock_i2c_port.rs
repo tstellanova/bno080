@@ -1,15 +1,12 @@
-
-
 extern crate std;
-
 
 use super::PACKET_HEADER_LENGTH;
 
+use core::ops::Shr;
 use embedded_hal::blocking::{
     delay::DelayMs,
-    i2c::{Read, WriteRead, Write}
+    i2c::{Read, Write, WriteRead},
 };
-use core::ops::Shr;
 use std::collections::VecDeque;
 
 struct FakeDelay {}
@@ -60,24 +57,22 @@ impl FakeI2cPort {
         let pack = FakePacket::new_from_slice(bytes);
         self.available_packets.push_back(pack);
     }
-
 }
 
 impl Read for FakeI2cPort {
     type Error = ();
 
     fn read(&mut self, addr: u8, buffer: &mut [u8]) -> Result<(), Self::Error> {
-        let next_pack = self.available_packets.pop_front().unwrap_or(
-            FakePacket {
+        let next_pack =
+            self.available_packets.pop_front().unwrap_or(FakePacket {
                 addr: addr,
                 len: 0,
                 buf: [0; MAX_FAKE_PACKET_SIZE],
-            }
-        );
+            });
 
         let src_len = next_pack.len;
         if src_len == 0 {
-            return Ok(())
+            return Ok(());
         }
 
         let dest_len = buffer.len();
@@ -93,17 +88,20 @@ impl Read for FakeI2cPort {
                 len: remainder_len + 4,
                 buf: [0; MAX_FAKE_PACKET_SIZE],
             };
-            remainder_packet.buf[PACKET_HEADER_LENGTH..PACKET_HEADER_LENGTH+remainder_len]
-                .copy_from_slice(&next_pack.buf[read_len..read_len+remainder_len]);
-            remainder_packet.buf[0] = ((remainder_len+4) & 0xFF) as u8;
-            remainder_packet.buf[1] = ((((remainder_len+4) & 0xFF00) as u16).shr(8) as u8) | 0x80; //set continuation flag
+            remainder_packet.buf
+                [PACKET_HEADER_LENGTH..PACKET_HEADER_LENGTH + remainder_len]
+                .copy_from_slice(
+                    &next_pack.buf[read_len..read_len + remainder_len],
+                );
+            remainder_packet.buf[0] = ((remainder_len + 4) & 0xFF) as u8;
+            remainder_packet.buf[1] =
+                ((((remainder_len + 4) & 0xFF00) as u16).shr(8) as u8) | 0x80; //set continuation flag
             self.available_packets.push_front(remainder_packet);
-        }
-        else if src_len == dest_len {
+        } else if src_len == dest_len {
             let read_len = src_len;
             buffer[..read_len].copy_from_slice(&next_pack.buf[..read_len]);
-        }
-        else { // src_len < dest_len
+        } else {
+            // src_len < dest_len
             panic!("src_len {} dest_len {}", src_len, dest_len);
         }
 
@@ -124,11 +122,14 @@ impl Write for FakeI2cPort {
 impl WriteRead for FakeI2cPort {
     type Error = ();
 
-    fn write_read(&mut self, address: u8, send_buf: &[u8], recv_buf: &mut [u8]) -> Result<(), Self::Error> {
+    fn write_read(
+        &mut self,
+        address: u8,
+        send_buf: &[u8],
+        recv_buf: &mut [u8],
+    ) -> Result<(), Self::Error> {
         self.write(address, send_buf)?;
         self.read(address, recv_buf)?;
         Ok(())
     }
 }
-
-

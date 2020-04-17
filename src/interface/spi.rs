@@ -48,12 +48,19 @@ where
 
     /// Wait for sensor to be ready.
     /// After reset this can take around 120 ms
-    fn wait_for_sensor_ready(&mut self, delay_source: &mut impl DelayMs<u8>) -> bool {
+    fn wait_for_sensor_ready(
+        &mut self,
+        delay_source: &mut impl DelayMs<u8>,
+    ) -> bool {
         self.wait_for_data_available(250, delay_source)
     }
 
     /// return true if the sensor is ready to provide data
-    fn wait_for_data_available(&mut self, max_ms: u8, delay_source: &mut impl DelayMs<u8>) -> bool {
+    fn wait_for_data_available(
+        &mut self,
+        max_ms: u8,
+        delay_source: &mut impl DelayMs<u8>,
+    ) -> bool {
         for _i in 0..max_ms {
             if self.sensor_ready() {
                 return true;
@@ -66,9 +73,12 @@ where
     /// read the body ("cargo" or "payload") of a packet,
     /// return the total packet length read
     fn read_packet_cargo(&mut self, recv_buf: &mut [u8]) -> usize {
-        let mut packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
+        let mut packet_len = SensorCommon::parse_packet_header(
+            &recv_buf[..PACKET_HEADER_LENGTH],
+        );
         // now get the body
-        if (packet_len > PACKET_HEADER_LENGTH) && (packet_len < recv_buf.len()) {
+        if (packet_len > PACKET_HEADER_LENGTH) && (packet_len < recv_buf.len())
+        {
             //exchange 0xFF bytes for whatever the sensor is sending
             for w in recv_buf[PACKET_HEADER_LENGTH..packet_len].iter_mut() {
                 *w = 0xFF;
@@ -87,7 +97,8 @@ where
     }
 }
 
-impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface for SpiInterface<SPI, CSN, IN, WAK, RS>
+impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface
+    for SpiInterface<SPI, CSN, IN, WAK, RS>
 where
     SPI: embedded_hal::blocking::spi::Write<u8, Error = CommE>
         + embedded_hal::blocking::spi::Transfer<u8, Error = CommE>,
@@ -98,7 +109,10 @@ where
 {
     type SensorError = Error<CommE, PinE>;
 
-    fn setup(&mut self, delay_source: &mut impl DelayMs<u8>) -> Result<(), Self::SensorError> {
+    fn setup(
+        &mut self,
+        delay_source: &mut impl DelayMs<u8>,
+    ) -> Result<(), Self::SensorError> {
         // Deselect sensor
         self.csn.set_high().map_err(Error::Pin)?;
         // Set WAK / PS0 to high before we reset, in order to select SPI (vs UART) mode
@@ -173,7 +187,10 @@ where
         Ok(())
     }
 
-    fn read_packet(&mut self, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError> {
+    fn read_packet(
+        &mut self,
+        recv_buf: &mut [u8],
+    ) -> Result<usize, Self::SensorError> {
         //detect whether the sensor is ready to send data
         if !self.sensor_ready() {
             return Ok(0);
