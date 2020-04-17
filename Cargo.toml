@@ -20,10 +20,10 @@ keywords = [
 readme = "README.md"
 
 [dependencies]
-cortex-m = "^0.6.0"
-embedded-hal = { version = "0.2.2", features = ["unproven"] }
-cortex-m-semihosting = "0.3.5"
+embedded-hal = { version = "0.2.3", features = ["unproven"] }
+#cortex-m-semihosting = {version="0.3.5"}
+panic-rtt-core = {version="0.1.0", optional=true}
 
-
-
-
+[features]
+default = []
+rttdebug = ["panic-rtt-core"]

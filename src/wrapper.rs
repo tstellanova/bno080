@@ -8,7 +8,8 @@ use embedded_hal::blocking::delay::DelayMs;
 
 use core::ops::Shr;
 
-use crate::debug_println;
+#[cfg(feature = "rttdebug")]
+use panic_rtt_core::rprintln;
 
 const PACKET_SEND_BUF_LEN: usize = 256;
 const PACKET_RECV_BUF_LEN: usize = 1024;
@@ -129,7 +130,8 @@ where
                 self.handle_received_packet(received_len);
             }
         } else {
-            debug_println!("handle1 err {:?}", res);
+            #[cfg(feature = "rttdebug")]
+            rprintln!("handle1 err {:?}", res);
         }
 
         msg_count
@@ -139,22 +141,16 @@ where
     /// returning the size of the packet received or zero
     /// if there was no packet to read.
     pub fn eat_one_message(&mut self) -> usize {
-        let mut msg_count = 0;
-
         let res = self.receive_packet();
-        if res.is_ok() {
-            let received_len = res.unwrap_or(0);
-            if received_len > 0 {
-                let _msg = self.packet_recv_buf;
-                debug_println!("eat {}", received_len);
-                // debug_println!("eat [0x{:x}, 0x{:x}, 0x{:x}, 0x{:x}]", msg[0], msg[1], msg[2], msg[3]);
-                msg_count += 1;
-            }
+        return if let Ok(received_len) = res {
+            #[cfg(feature = "rttdebug")]
+            rprintln!("e1 {}", received_len);
+            received_len
         } else {
-            debug_println!("eat1 err {:?}", res);
-        }
-
-        msg_count
+            #[cfg(feature = "rttdebug")]
+            rprintln!("eat1 err {:?}", res);
+            0
+        };
     }
 
     fn handle_advertise_response(&mut self, received_len: usize) {
@@ -162,7 +158,8 @@ where
         let payload = &self.packet_recv_buf[PACKET_HEADER_LENGTH..received_len];
         let mut cursor: usize = 1; //skip response type
 
-        debug_println!("AdvRsp: {}", payload_len);
+        #[cfg(feature = "rttdebug")]
+        rprintln!("AdvRsp: {}", payload_len);
 
         while cursor < payload_len {
             let _tag: u8 = payload[cursor];
@@ -230,9 +227,16 @@ where
         // let mut report_count = 0;
         let mut outer_cursor: usize = PACKET_HEADER_LENGTH + 5; //skip header, timestamp
                                                                 //TODO need to skip more above for a payload-level timestamp??
+        if received_len < outer_cursor {
+            #[cfg(feature = "rttdebug")]
+            rprintln!("bad lens: {} < {}", received_len, outer_cursor);
+            return;
+        }
+
         let payload_len = received_len - outer_cursor;
         if payload_len < 14 {
-            debug_println!(
+            #[cfg(feature = "rttdebug")]
+            rprintln!(
                 "bad report: {:?}",
                 &self.packet_recv_buf[..PACKET_HEADER_LENGTH]
             );
@@ -244,16 +248,21 @@ where
         while outer_cursor < payload_len {
             //let start_cursor = outer_cursor;
             let (inner_cursor, report_id, data1, data2, data3, data4, data5) =
-                Self::handle_one_input_report(outer_cursor, &self.packet_recv_buf[..received_len]);
+                Self::handle_one_input_report(
+                    outer_cursor,
+                    &self.packet_recv_buf[..received_len],
+                );
             outer_cursor = inner_cursor;
             // report_count += 1;
             match report_id {
                 SENSOR_REPORTID_ROTATION_VECTOR => {
-                    self.update_rotation_quaternion(data1, data2, data3, data4, data5);
+                    self.update_rotation_quaternion(
+                        data1, data2, data3, data4, data5,
+                    );
                 }
                 _ => {
-                    debug_println!("unhin: 0x{:X}", report_id);
-                    // debug_println!("unhin: 0x{:X} {:?}  ", report_id, &self.packet_recv_buf[start_cursor..start_cursor+5]);
+                    // debug_println!("uhr: {:X}", report_id);
+                    // debug_println!("uhr: 0x{:X} {:?}  ", report_id, &self.packet_recv_buf[start_cursor..start_cursor+5]);
                 }
             }
         }
@@ -263,7 +272,14 @@ where
 
     /// Given a set of quaternion values in the Q-fixed-point format,
     /// calculate and update the corresponding float values
-    fn update_rotation_quaternion(&mut self, q_i: i16, q_j: i16, q_k: i16, q_r: i16, q_a: i16) {
+    fn update_rotation_quaternion(
+        &mut self,
+        q_i: i16,
+        q_j: i16,
+        q_k: i16,
+        q_r: i16,
+        q_a: i16,
+    ) {
         //debug_println!("rquat {} {} {} {} {}", q_i, q_j, q_k, q_r, q_a);
         self.rotation_quaternion = [
             q14_to_f32(q_i),
@@ -283,7 +299,8 @@ where
         for cursor in 1..payload_len {
             let err: u8 = payload[cursor];
             self.last_error_received = err;
-            debug_println!("lerr: {:x}", err);
+            #[cfg(feature = "rttdebug")]
+            rprintln!("lerr: {:x}", err);
         }
     }
 
@@ -308,17 +325,20 @@ where
                 }
                 _ => {
                     self.last_command_chan_rid = report_id;
-                    debug_println!("unh cmd: {}", report_id);
+                    #[cfg(feature = "rttdebug")]
+                    rprintln!("unh cmd: {}", report_id);
                 }
             },
             CHANNEL_EXECUTABLE => match report_id {
                 EXECUTABLE_DEVICE_RESP_RESET_COMPLETE => {
                     self.device_reset = true;
-                    debug_println!("resp_reset {}", 1);
+                    #[cfg(feature = "rttdebug")]
+                    rprintln!("resp_reset {}", 1);
                 }
                 _ => {
                     self.last_exec_chan_rid = report_id;
-                    debug_println!("unh exe: {:x}", report_id);
+                    #[cfg(feature = "rttdebug")]
+                    rprintln!("unh exe: {:x}", report_id);
                 }
             },
             CHANNEL_HUB_CONTROL => {
@@ -331,21 +351,26 @@ where
                         } else if cmd_resp == SH2_INIT_SYSTEM {
                             self.init_received = true;
                         }
-                        debug_println!("CMD_RESP: 0x{:X}", cmd_resp);
+                        #[cfg(feature = "rttdebug")]
+                        rprintln!("CMD_RESP: 0x{:X}", cmd_resp);
                     }
                     SHUB_PROD_ID_RESP => {
-                        debug_println!("PID_RESP {}", 1);
+                        #[cfg(feature = "rttdebug")]
+                        rprintln!("PID_RESP {}", 1);
                         self.prod_id_verified = true;
                     }
                     SHUB_GET_FEATURE_RESP => {
                         // 0xFC
-                        debug_println!("feat resp: {}",  msg[5]);
+                        #[cfg(feature = "rttdebug")]
+                        rprintln!("feat resp: {}", msg[5]);
                     }
                     _ => {
-                        debug_println!("unh hbc: 0x{:X} {:?}",
-                                report_id,
-                                &msg[..PACKET_HEADER_LENGTH]
-                            );
+                        #[cfg(feature = "rttdebug")]
+                        rprintln!(
+                            "unh hbc: 0x{:X} {:?}",
+                            report_id,
+                            &msg[..PACKET_HEADER_LENGTH]
+                        );
                     }
                 }
             }
@@ -354,21 +379,30 @@ where
             }
             _ => {
                 self.last_chan_received = chan_num;
-                debug_println!("unh chan 0x{:X}", chan_num);
+                #[cfg(feature = "rttdebug")]
+                rprintln!("unh chan 0x{:X}", chan_num);
             }
         }
     }
 
     /// The BNO080 starts up with all sensors disabled,
     /// waiting for the application to configure it.
-    pub fn init(&mut self, delay_source: &mut impl DelayMs<u8>) -> Result<(), WrapperError<SE>> {
+    pub fn init(
+        &mut self,
+        delay_source: &mut impl DelayMs<u8>,
+    ) -> Result<(), WrapperError<SE>> {
+        #[cfg(feature = "rttdebug")]
+        rprintln!("wrapper init");
         //Section 5.1.1.1 : On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
         self.sensor_interface
             .setup(delay_source)
             .map_err(WrapperError::CommError)?;
         delay_source.delay_ms(1u8);
-        self.soft_reset()?;
+        if self.sensor_interface.requires_soft_reset() {
+            self.soft_reset()?;
+        }
+
         delay_source.delay_ms(50u8);
         self.eat_all_messages(delay_source);
         delay_source.delay_ms(100u8);
@@ -387,7 +421,10 @@ where
         &mut self,
         millis_between_reports: u16,
     ) -> Result<(), WrapperError<SE>> {
-        self.enable_report(SENSOR_REPORTID_ROTATION_VECTOR, millis_between_reports)
+        self.enable_report(
+            SENSOR_REPORTID_ROTATION_VECTOR,
+            millis_between_reports,
+        )
     }
 
     /// Enable a particular report
@@ -396,10 +433,11 @@ where
         report_id: u8,
         millis_between_reports: u16,
     ) -> Result<(), WrapperError<SE>> {
+        #[cfg(feature = "rttdebug")]
+        rprintln!("enable_report 0x{:X}", report_id);
 
-        debug_println!("enable_report 0x{:X}", report_id);
-
-        let micros_between_reports: u32 = (millis_between_reports as u32) * 1000;
+        let micros_between_reports: u32 =
+            (millis_between_reports as u32) * 1000;
         let cmd_body: [u8; 17] = [
             SHUB_REPORT_SET_FEATURE_CMD,
             report_id,
@@ -410,7 +448,7 @@ where
             (micros_between_reports.shr(8) & 0xFFu32) as u8,
             (micros_between_reports.shr(16) & 0xFFu32) as u8,
             (micros_between_reports.shr(24) & 0xFFu32) as u8, // MSB report interval
-            0,                                                // LSB Batch Interval
+            0, // LSB Batch Interval
             0,
             0,
             0, // MSB Batch interval
@@ -440,14 +478,20 @@ where
         ];
         self.sequence_numbers[channel as usize] += 1;
 
-        self.packet_send_buf[..PACKET_HEADER_LENGTH].copy_from_slice(packet_header.as_ref());
-        self.packet_send_buf[PACKET_HEADER_LENGTH..packet_length].copy_from_slice(body_data);
+        self.packet_send_buf[..PACKET_HEADER_LENGTH]
+            .copy_from_slice(packet_header.as_ref());
+        self.packet_send_buf[PACKET_HEADER_LENGTH..packet_length]
+            .copy_from_slice(body_data);
 
         packet_length
     }
 
     /// Send packet from our packet send buf
-    fn send_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<usize, WrapperError<SE>> {
+    fn send_packet(
+        &mut self,
+        channel: u8,
+        body_data: &[u8],
+    ) -> Result<usize, WrapperError<SE>> {
         let packet_length = self.prep_send_packet(channel, body_data);
         self.sensor_interface
             .write_packet(&self.packet_send_buf[..packet_length])
@@ -465,7 +509,8 @@ where
             .map_err(WrapperError::CommError)?;
 
         self.last_packet_len_received = packet_len;
-        //debug_println!("recv {}" , packet_len);
+        #[cfg(feature = "rttdebug")]
+        rprintln!("recv {}", packet_len);
 
         Ok(packet_len)
     }
@@ -477,7 +522,8 @@ where
             0,                //reserved
         ];
 
-        let recv_len = self.send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
+        let recv_len = self
+            .send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
         if recv_len > PACKET_HEADER_LENGTH {
             self.handle_received_packet(recv_len);
         }
@@ -505,8 +551,8 @@ where
     /// Normally applications should not need to call this directly,
     /// as it is called during `init`.
     pub fn soft_reset(&mut self) -> Result<(), WrapperError<SE>> {
-        let data: [u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET]; //reset execute
-                                                           // send command packet and ignore received packets
+        let data: [u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET];
+        // send command packet and ignore received packets
         self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
         Ok(())
     }
@@ -518,6 +564,9 @@ where
         body_data: &[u8],
     ) -> Result<usize, WrapperError<SE>> {
         let send_packet_length = self.prep_send_packet(channel, body_data);
+        #[cfg(feature = "rttdebug")]
+        rprintln!("srcv {} ...", send_packet_length);
+
         let recv_packet_length = self
             .sensor_interface
             .send_and_receive_packet(
@@ -526,7 +575,9 @@ where
             )
             .map_err(WrapperError::CommError)?;
 
-        debug_println!("srecv {} {}", send_packet_length, recv_packet_length);
+        #[cfg(feature = "rttdebug")]
+        rprintln!("srcv {} {}", send_packet_length, recv_packet_length);
+
         Ok(recv_packet_length)
     }
 }
@@ -609,14 +660,15 @@ const EXECUTABLE_DEVICE_RESP_RESET_COMPLETE: u8 = 1;
 const SH2_INIT_UNSOLICITED: u8 = 0x80;
 const SH2_CMD_INITIALIZE: u8 = 4;
 const SH2_INIT_SYSTEM: u8 = 1;
-const SH2_STARTUP_INIT_UNSOLICITED: u8 = SH2_CMD_INITIALIZE | SH2_INIT_UNSOLICITED;
+const SH2_STARTUP_INIT_UNSOLICITED: u8 =
+    SH2_CMD_INITIALIZE | SH2_INIT_UNSOLICITED;
 
 #[cfg(test)]
 mod tests {
     // use super::*;
-    use crate::interface::mock_i2c_port::FakeI2cPort;
-    use crate::wrapper::{q14_to_f32, Q14_SCALE, BNO080};
     use crate::interface::i2c::DEFAULT_ADDRESS;
+    use crate::interface::mock_i2c_port::FakeI2cPort;
+    use crate::wrapper::{q14_to_f32, BNO080, Q14_SCALE};
 
     use crate::interface::I2cInterface;
 
@@ -638,8 +690,10 @@ mod tests {
         let packet = ADVERTISING_PACKET_FULL;
         mock_i2c_port.add_available_packet(&packet);
 
-        let mut shub = BNO080::new_with_interface(
-            I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
+        let mut shub = BNO080::new_with_interface(I2cInterface::new(
+            mock_i2c_port,
+            DEFAULT_ADDRESS,
+        ));
         let rc = shub.receive_packet();
 
         assert!(rc.is_ok());
@@ -658,37 +712,47 @@ mod tests {
     //     assert_eq!(sent_pack.len, 5);
     // }
 
-
     #[test]
     fn test_handle_adv_message() {
         let mut mock_i2c_port = FakeI2cPort::new();
 
         //actual startup response packet
         let raw_packet = ADVERTISING_PACKET_FULL;
-        mock_i2c_port.add_available_packet( &raw_packet);
+        mock_i2c_port.add_available_packet(&raw_packet);
 
-        let mut shub = BNO080::new_with_interface(
-            I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
+        let mut shub = BNO080::new_with_interface(I2cInterface::new(
+            mock_i2c_port,
+            DEFAULT_ADDRESS,
+        ));
 
         let msg_count = shub.handle_one_message();
         assert_eq!(msg_count, 1, "wrong msg_count");
-
     }
 
     // Actual advertising packet received from sensor:
     pub const ADVERTISING_PACKET_FULL: [u8; 276] = [
-        0x14, 0x81, 0x00, 0x01,
-        0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x80, 0x06, 0x31, 0x2e, 0x30, 0x2e, 0x30, 0x00, 0x02, 0x02, 0x00, 0x01, 0x03, 0x02, 0xff, 0x7f, 0x04, 0x02, 0x00, 0x01, 0x05,
-        0x02, 0xff, 0x7f, 0x08, 0x05, 0x53, 0x48, 0x54, 0x50, 0x00, 0x06, 0x01, 0x00, 0x09, 0x08, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x00, 0x01, 0x04, 0x01, 0x00, 0x00,
-        0x00, 0x08, 0x0b, 0x65, 0x78, 0x65, 0x63, 0x75, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x00, 0x06, 0x01, 0x01, 0x09, 0x07, 0x64, 0x65, 0x76, 0x69, 0x63, 0x65, 0x00, 0x01, 0x04,
-        0x02, 0x00, 0x00, 0x00, 0x08, 0x0a, 0x73, 0x65, 0x6e, 0x73, 0x6f, 0x72, 0x68, 0x75, 0x62, 0x00, 0x06, 0x01, 0x02, 0x09, 0x08, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c,
-        0x00, 0x06, 0x01, 0x03, 0x09, 0x0c, 0x69, 0x6e, 0x70, 0x75, 0x74, 0x4e, 0x6f, 0x72, 0x6d, 0x61, 0x6c, 0x00, 0x07, 0x01, 0x04, 0x09, 0x0a, 0x69, 0x6e, 0x70, 0x75, 0x74,
-        0x57, 0x61, 0x6b, 0x65, 0x00, 0x06, 0x01, 0x05, 0x09, 0x0c, 0x69, 0x6e, 0x70, 0x75, 0x74, 0x47, 0x79, 0x72, 0x6f, 0x52, 0x76, 0x00, 0x80, 0x06, 0x31, 0x2e, 0x31, 0x2e,
-        0x30, 0x00, 0x81, 0x64, 0xf8, 0x10, 0xf5, 0x04, 0xf3, 0x10, 0xf1, 0x10, 0xfb, 0x05, 0xfa, 0x05, 0xfc, 0x11, 0xef, 0x02, 0x01, 0x0a, 0x02, 0x0a, 0x03, 0x0a, 0x04, 0x0a,
-        0x05, 0x0e, 0x06, 0x0a, 0x07, 0x10, 0x08, 0x0c, 0x09, 0x0e, 0x0a, 0x08, 0x0b, 0x08, 0x0c, 0x06, 0x0d, 0x06, 0x0e, 0x06, 0x0f, 0x10, 0x10, 0x05, 0x11, 0x0c, 0x12, 0x06,
-        0x13, 0x06, 0x14, 0x10, 0x15, 0x10, 0x16, 0x10, 0x17, 0x00, 0x18, 0x08, 0x19, 0x06, 0x1a, 0x00, 0x1b, 0x00, 0x1c, 0x06, 0x1d, 0x00, 0x1e, 0x10, 0x1f, 0x00, 0x20, 0x00,
-        0x21, 0x00, 0x22, 0x00, 0x23, 0x00, 0x24, 0x00, 0x25, 0x00, 0x26, 0x00, 0x27, 0x00, 0x28, 0x0e, 0x29, 0x0c, 0x2a, 0x0e
+        0x14, 0x81, 0x00, 0x01, 0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x80,
+        0x06, 0x31, 0x2e, 0x30, 0x2e, 0x30, 0x00, 0x02, 0x02, 0x00, 0x01, 0x03,
+        0x02, 0xff, 0x7f, 0x04, 0x02, 0x00, 0x01, 0x05, 0x02, 0xff, 0x7f, 0x08,
+        0x05, 0x53, 0x48, 0x54, 0x50, 0x00, 0x06, 0x01, 0x00, 0x09, 0x08, 0x63,
+        0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x00, 0x01, 0x04, 0x01, 0x00, 0x00,
+        0x00, 0x08, 0x0b, 0x65, 0x78, 0x65, 0x63, 0x75, 0x74, 0x61, 0x62, 0x6c,
+        0x65, 0x00, 0x06, 0x01, 0x01, 0x09, 0x07, 0x64, 0x65, 0x76, 0x69, 0x63,
+        0x65, 0x00, 0x01, 0x04, 0x02, 0x00, 0x00, 0x00, 0x08, 0x0a, 0x73, 0x65,
+        0x6e, 0x73, 0x6f, 0x72, 0x68, 0x75, 0x62, 0x00, 0x06, 0x01, 0x02, 0x09,
+        0x08, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x00, 0x06, 0x01, 0x03,
+        0x09, 0x0c, 0x69, 0x6e, 0x70, 0x75, 0x74, 0x4e, 0x6f, 0x72, 0x6d, 0x61,
+        0x6c, 0x00, 0x07, 0x01, 0x04, 0x09, 0x0a, 0x69, 0x6e, 0x70, 0x75, 0x74,
+        0x57, 0x61, 0x6b, 0x65, 0x00, 0x06, 0x01, 0x05, 0x09, 0x0c, 0x69, 0x6e,
+        0x70, 0x75, 0x74, 0x47, 0x79, 0x72, 0x6f, 0x52, 0x76, 0x00, 0x80, 0x06,
+        0x31, 0x2e, 0x31, 0x2e, 0x30, 0x00, 0x81, 0x64, 0xf8, 0x10, 0xf5, 0x04,
+        0xf3, 0x10, 0xf1, 0x10, 0xfb, 0x05, 0xfa, 0x05, 0xfc, 0x11, 0xef, 0x02,
+        0x01, 0x0a, 0x02, 0x0a, 0x03, 0x0a, 0x04, 0x0a, 0x05, 0x0e, 0x06, 0x0a,
+        0x07, 0x10, 0x08, 0x0c, 0x09, 0x0e, 0x0a, 0x08, 0x0b, 0x08, 0x0c, 0x06,
+        0x0d, 0x06, 0x0e, 0x06, 0x0f, 0x10, 0x10, 0x05, 0x11, 0x0c, 0x12, 0x06,
+        0x13, 0x06, 0x14, 0x10, 0x15, 0x10, 0x16, 0x10, 0x17, 0x00, 0x18, 0x08,
+        0x19, 0x06, 0x1a, 0x00, 0x1b, 0x00, 0x1c, 0x06, 0x1d, 0x00, 0x1e, 0x10,
+        0x1f, 0x00, 0x20, 0x00, 0x21, 0x00, 0x22, 0x00, 0x23, 0x00, 0x24, 0x00,
+        0x25, 0x00, 0x26, 0x00, 0x27, 0x00, 0x28, 0x0e, 0x29, 0x0c, 0x2a, 0x0e,
     ];
-
-
 }

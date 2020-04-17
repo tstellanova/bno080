@@ -5,12 +5,8 @@ LICENSE: BSD3 (see LICENSE file)
 
 #![no_std]
 
-
 pub mod interface;
 pub mod wrapper;
-
-#[macro_use]
-pub mod macros;
 
 /// Errors in this crate
 #[derive(Debug)]
@@ -23,5 +19,3 @@ pub enum Error<CommE, PinE> {
     /// The sensor is not responding
     SensorUnresponsive,
 }
-
-
