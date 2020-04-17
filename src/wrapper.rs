@@ -141,7 +141,7 @@ where
     pub fn eat_one_message(&mut self) -> usize {
         let res = self.receive_packet();
         return if let Ok(received_len) = res {
-            debug_println!("eat1 {}", received_len);
+            debug_println!("e1 {}",received_len);
             received_len
         } else {
             debug_println!("eat1 err {:?}", res);
@@ -254,7 +254,7 @@ where
                     );
                 }
                 _ => {
-                    debug_println!("uhr: {:X}", report_id);
+                    // debug_println!("uhr: {:X}", report_id);
                     // debug_println!("uhr: 0x{:X} {:?}  ", report_id, &self.packet_recv_buf[start_cursor..start_cursor+5]);
                 }
             }
@@ -528,8 +528,8 @@ where
     /// Normally applications should not need to call this directly,
     /// as it is called during `init`.
     pub fn soft_reset(&mut self) -> Result<(), WrapperError<SE>> {
-        let data: [u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET]; //reset execute
-                                                           // send command packet and ignore received packets
+        let data: [u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET];
+        // send command packet and ignore received packets
         self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
         Ok(())
     }
@@ -549,7 +549,8 @@ where
             )
             .map_err(WrapperError::CommError)?;
 
-        debug_println!("srecv {} {}", send_packet_length, recv_packet_length);
+        debug_println!("srcv {} {}", send_packet_length, recv_packet_length);
+
         Ok(recv_packet_length)
     }
 }

@@ -21,5 +21,5 @@ readme = "README.md"
 
 [dependencies]
 embedded-hal = { version = "0.2.3", features = ["unproven"] }
-cortex-m-semihosting = "0.3.5"
+cortex-m-semihosting = {version="0.3.5"}
 

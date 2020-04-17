@@ -1,11 +1,17 @@
+
+
+/// Debug print macro that is defined to an empty macro unless feature `dbgoprint` is enabled
+///
+#[cfg(any(not(debug_assertions), test))]
 #[macro_export]
-#[cfg(all(debug_assertions, test))]
 macro_rules! debug_println {
-    ($s:expr, $($tt:tt)*) => {{}};
+    ($($arg:tt)*) =>  {{}};
 }
 
-#[macro_export]
+/// Debug print macro that is defined to an empty macro unless feature `dbgoprint` is enabled
+///
 #[cfg(all(debug_assertions, not(test)))]
+#[macro_export]
 macro_rules! debug_println {
     ($($arg:tt)*) => ({
         use cortex_m_semihosting::hprintln;
@@ -13,8 +19,6 @@ macro_rules! debug_println {
     });
 }
 
-#[macro_export]
-#[cfg(not(debug_assertions))]
-macro_rules! debug_println {
-    ($s:expr, $($tt:tt)*) => {{}};
-}
+
+
+
