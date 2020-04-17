@@ -46,10 +46,7 @@ where
     }
 
     fn read_packet_header(&mut self) -> Result<(), Error<CommE, ()>> {
-        //zero header
-        for byte in &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH] {
-            *byte = 0;
-        }
+        self.zero_recv_packet_header();
         self.i2c_port
             .read(self.address, &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH])
             .map_err(Error::Comm)?;
@@ -99,13 +96,9 @@ where
                         whole_segment_length
                     };
 
-                // #[cfg(not(test))]
-                // #[cfg(debug_assertions)]
                 debug_println!("r.s {:x} {}", self.address, segment_read_len);
-                //zero packet header receive buffer
-                for byte in &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH] {
-                    *byte = 0;
-                }
+
+                self.zero_recv_packet_header();
                 self.i2c_port
                     .read(
                         self.address,
@@ -148,6 +141,12 @@ where
         }
 
         Ok(already_read_len)
+    }
+
+    fn zero_recv_packet_header(&mut self) {
+        for byte in &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH] {
+            *byte = 0;
+        }
     }
 }
 
@@ -210,6 +209,7 @@ where
         Ok(received_len)
     }
 
+
     fn send_and_receive_packet(
         &mut self,
         send_buf: &[u8],
@@ -222,10 +222,7 @@ where
             .write(self.address, send_buf)
             .map_err(Error::Comm)?;
 
-        // zero packet header receive buffer
-        for byte in &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH] {
-            *byte = 0;
-        }
+        self.zero_recv_packet_header();
 
         self.i2c_port
             .read(self.address, &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH])

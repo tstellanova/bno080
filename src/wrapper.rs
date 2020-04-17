@@ -139,22 +139,14 @@ where
     /// returning the size of the packet received or zero
     /// if there was no packet to read.
     pub fn eat_one_message(&mut self) -> usize {
-        let mut msg_count = 0;
-
         let res = self.receive_packet();
-        if res.is_ok() {
-            let received_len = res.unwrap_or(0);
-            if received_len > 0 {
-                let _msg = self.packet_recv_buf;
-                debug_println!("eat {}", received_len);
-                // debug_println!("eat [0x{:x}, 0x{:x}, 0x{:x}, 0x{:x}]", msg[0], msg[1], msg[2], msg[3]);
-                msg_count += 1;
-            }
+        return if let Ok(received_len) = res {
+            debug_println!("eat1 {}", received_len);
+            received_len
         } else {
             debug_println!("eat1 err {:?}", res);
+            0
         }
-
-        msg_count
     }
 
     fn handle_advertise_response(&mut self, received_len: usize) {
