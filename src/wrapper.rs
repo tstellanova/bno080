@@ -230,6 +230,12 @@ where
         // let mut report_count = 0;
         let mut outer_cursor: usize = PACKET_HEADER_LENGTH + 5; //skip header, timestamp
                                                                 //TODO need to skip more above for a payload-level timestamp??
+        if received_len < outer_cursor {
+            debug_println!(
+                "bad lens: {} < {}", received_len, outer_cursor);
+            return;
+        }
+
         let payload_len = received_len - outer_cursor;
         if payload_len < 14 {
             debug_println!(
@@ -252,8 +258,8 @@ where
                     self.update_rotation_quaternion(data1, data2, data3, data4, data5);
                 }
                 _ => {
-                    debug_println!("unhin: 0x{:X}", report_id);
-                    // debug_println!("unhin: 0x{:X} {:?}  ", report_id, &self.packet_recv_buf[start_cursor..start_cursor+5]);
+                    debug_println!("uhr: {:X}", report_id);
+                    // debug_println!("uhr: 0x{:X} {:?}  ", report_id, &self.packet_recv_buf[start_cursor..start_cursor+5]);
                 }
             }
         }
