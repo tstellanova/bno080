@@ -381,7 +381,10 @@ where
             .setup(delay_source)
             .map_err(WrapperError::CommError)?;
         delay_source.delay_ms(1u8);
-        self.soft_reset()?;
+        if self.sensor_interface.requires_soft_reset() {
+            self.soft_reset()?;
+        }
+
         delay_source.delay_ms(50u8);
         self.eat_all_messages(delay_source);
         delay_source.delay_ms(100u8);

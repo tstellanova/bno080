@@ -1,7 +1,6 @@
 use super::{SensorCommon, SensorInterface, PACKET_HEADER_LENGTH};
 use crate::Error;
 use embedded_hal::blocking::delay::DelayMs;
-//use crate::debug_println;
 
 
 /// the i2c address normally used by BNO080
@@ -150,6 +149,10 @@ where
         + embedded_hal::blocking::i2c::WriteRead<Error = CommE>,
 {
     type SensorError = Error<CommE, ()>;
+
+    fn requires_soft_reset(&self) -> bool {
+        true
+    }
 
     fn setup(
         &mut self,

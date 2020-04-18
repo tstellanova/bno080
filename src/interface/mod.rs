@@ -37,6 +37,11 @@ pub trait SensorInterface {
         send_buf: &[u8],
         recv_buf: &mut [u8],
     ) -> Result<usize, Self::SensorError>;
+
+
+    /// Does this interface require a soft reset after init?
+    fn requires_soft_reset(&self) -> bool;
+
 }
 
 pub use self::i2c::I2cInterface;

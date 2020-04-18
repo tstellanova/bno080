@@ -4,9 +4,10 @@ use super::SensorInterface;
 use crate::interface::{SensorCommon, PACKET_HEADER_LENGTH};
 use embedded_hal::blocking::delay::DelayMs;
 use embedded_hal::digital::v2::{InputPin, OutputPin};
-// use core::fmt::Write;
 
 use crate::Error;
+use crate::debug_println;
+use crate::Error::SensorUnresponsive;
 
 
 /// Encapsulates all the lines required to operate this sensor
@@ -44,6 +45,8 @@ where
     IN: InputPin<Error = PinE>,
     WAK: OutputPin<Error = PinE>,
     RSTN: OutputPin<Error = PinE>,
+    CommE: core::fmt::Debug,
+    PinE: core::fmt::Debug,
 {
     pub fn new(lines: SpiControlLines<SPI, CSN, IN, WAK, RSTN>) -> Self {
         Self {
@@ -57,27 +60,31 @@ where
     }
 
 
-    fn sensor_ready(&self) -> bool {
+    /// Is the sensor indicating it has data available
+    /// "In SPI and I2C mode the HOST_INTN signal is used by the BNO080 to
+    /// indicate to the application processor that the BNO080 needs attention."
+    fn interrupt_signaled(&self) -> bool {
         self.hintn.is_low().unwrap_or(false)
     }
 
     /// Wait for sensor to be ready.
     /// After reset this can take around 120 ms
-    fn wait_for_sensor_ready(
+    fn wait_for_sensor_awake(
         &mut self,
         delay_source: &mut impl DelayMs<u8>,
     ) -> bool {
-        self.wait_for_data_available(250, delay_source)
+        self.wait_for_interrupt_signal(200, delay_source)
     }
 
-    /// return true if the sensor is ready to provide data
-    fn wait_for_data_available(
+    /// Return true if the sensor is ready to provide data
+    /// Time out after `max_ms` milliseconds
+    fn wait_for_interrupt_signal(
         &mut self,
         max_ms: u8,
         delay_source: &mut impl DelayMs<u8>,
     ) -> bool {
-        for _i in 0..max_ms {
-            if self.sensor_ready() {
+        for _ in 0..max_ms {
+            if self.interrupt_signaled() {
                 return true;
             }
             delay_source.delay_ms(1);
@@ -120,23 +127,42 @@ where
     IN: InputPin<Error = PinE>,
     WAK: OutputPin<Error = PinE>,
     RS: OutputPin<Error = PinE>,
+    CommE: core::fmt::Debug,
+    PinE: core::fmt::Debug,
 {
     type SensorError = Error<CommE, PinE>;
+
+    fn requires_soft_reset(&self) -> bool {
+        false
+    }
 
     fn setup(
         &mut self,
         delay_source: &mut impl DelayMs<u8>,
     ) -> Result<(), Self::SensorError> {
+        // 	digitalWrite(_cs, HIGH); //Deselect BNO080
+        // 	digitalWrite(_wake, HIGH); //Before boot up the PS0/WAK pin must be high to enter SPI mode
+        // 	digitalWrite(_rst, LOW);   //Reset BNO080
+        // 	delay(2);				   //Min length not specified in datasheet?
+        // 	digitalWrite(_rst, HIGH);  //Bring out of reset
+
         // Deselect sensor
         self.csn.set_high().map_err(Error::Pin)?;
+        // self.waken.set_low().map_err(Error::Pin)?;
         // Set WAK / PS0 to high before we reset, in order to select SPI (vs UART) mode
         self.waken.set_high().map_err(Error::Pin)?;
-        // begin reset cycle
+
+        // reset cycle
         self.reset.set_low().map_err(Error::Pin)?;
-        delay_source.delay_ms(5);
+        delay_source.delay_ms(10);
         self.reset.set_high().map_err(Error::Pin)?;
 
-        self.wait_for_sensor_ready(delay_source);
+        // wait for sensor to set hintn pin after reset
+        let ready = self.wait_for_sensor_awake(delay_source);
+        if !ready {
+            debug_println!("sensor not ready");
+            return Err(SensorUnresponsive);
+        }
 
         Ok(())
     }
@@ -146,23 +172,23 @@ where
         send_buf: &[u8],
         recv_buf: &mut [u8],
     ) -> Result<usize, Self::SensorError> {
-        //ensure that the first header bytes are zeroed since we're not sending any data
-        for i in recv_buf[..PACKET_HEADER_LENGTH].iter_mut() {
-            *i = 0;
-        }
-
-        //grab the sensor
+        // select the sensor
         self.csn.set_low().map_err(Error::Pin)?;
         let rc = self.spi.write(&send_buf).map_err(Error::Comm);
-
         if rc.is_err() {
             //release the sensor
             self.csn.set_high().map_err(Error::Pin)?;
             return Err(rc.unwrap_err());
         }
 
-        if !self.sensor_ready() {
+        //zero the receive buffer
+        for i in recv_buf[..PACKET_HEADER_LENGTH].iter_mut() {
+            *i = 0;
+        }
+
+        if !self.interrupt_signaled() {
             //no packet to be read
+            debug_println!("no packet to read?");
             return Ok(0);
         }
 
@@ -173,9 +199,11 @@ where
             .map_err(Error::Comm);
         if rc.is_err() {
             //release the sensor
+            debug_println!("transfer err: {:?}", rc);
             self.csn.set_high().map_err(Error::Pin)?;
             return Err(rc.unwrap_err());
         }
+
 
         let packet_len = self.read_packet_cargo(recv_buf);
 
@@ -201,14 +229,18 @@ where
         Ok(())
     }
 
+
+    /// Read a complete packet from the sensor
     fn read_packet(
         &mut self,
         recv_buf: &mut [u8],
     ) -> Result<usize, Self::SensorError> {
         //detect whether the sensor is ready to send data
-        if !self.sensor_ready() {
+        if !self.interrupt_signaled() {
+            debug_println!("no read_packet");
             return Ok(0);
         }
+
 
         //ensure that the first header bytes are zeroed since we're not sending any data
         for i in recv_buf[..PACKET_HEADER_LENGTH].iter_mut() {
@@ -228,6 +260,7 @@ where
             self.csn.set_high().map_err(Error::Pin)?;
             return Err(rc.unwrap_err());
         }
+
 
         let packet_len = self.read_packet_cargo(recv_buf);
 
