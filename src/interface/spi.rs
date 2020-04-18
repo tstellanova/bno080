@@ -8,11 +8,25 @@ use embedded_hal::digital::v2::{InputPin, OutputPin};
 
 use crate::Error;
 
-/// This combines the SPI peripheral and
-/// associated control pins such as:
-/// - CSN : Chip Select (aka SS or Slave Select)
+
+/// Encapsulates all the lines required to operate this sensor
+/// - SCK: clock line from master
+/// - MISO: Data input from the sensor to the master
+/// - MOSI: Output from the master to the sensor
+/// - CSN: chip select line that selects the device on the shared SPI bus
 /// - HINTN: Hardware Interrupt. Sensor uses this to indicate it had data available for read
 /// - WAK: Wake pin.  Master asserts this to choose SPI mode, then deasserts to wake up the sensor.
+/// - RSTN: Reset the device
+pub struct SpiControlLines<SPI, CSN, IN, WAK, RSTN> {
+    pub spi: SPI,
+    pub csn: CSN,
+    pub hintn: IN,
+    pub waken: WAK,
+    pub reset: RSTN,
+}
+
+/// This combines the SPI peripheral and associated control pins such as:
+
 pub struct SpiInterface<SPI, CSN, IN, WAK, RSTN> {
     spi: SPI,
     csn: CSN,
@@ -31,16 +45,17 @@ where
     WAK: OutputPin<Error = PinE>,
     RSTN: OutputPin<Error = PinE>,
 {
-    pub fn new(spi: SPI, csn: CSN, hintn: IN, waken: WAK, reset: RSTN) -> Self {
+    pub fn new(lines: SpiControlLines<SPI, CSN, IN, WAK, RSTN>) -> Self {
         Self {
-            spi,
-            csn,
-            hintn,
-            waken,
-            reset,
+            spi: lines.spi,
+            csn: lines.csn,
+            hintn: lines.hintn,
+            waken: lines.waken,
+            reset: lines.reset,
             received_packet_count: 0,
         }
     }
+
 
     fn sensor_ready(&self) -> bool {
         self.hintn.is_low().unwrap_or(false)
@@ -83,8 +98,7 @@ where
             for w in recv_buf[PACKET_HEADER_LENGTH..packet_len].iter_mut() {
                 *w = 0xFF;
             }
-            let rc = self
-                .spi
+            let rc = self.spi
                 .transfer(&mut recv_buf[PACKET_HEADER_LENGTH..packet_len]);
             if rc.is_err() {
                 packet_len = 0;
