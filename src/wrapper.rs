@@ -677,17 +677,6 @@ mod tests {
         assert_eq!(next_packet_size, packet.len(), "wrong length");
     }
 
-    // //TODO give access to sent packets for testing porpoises
-    // #[test]
-    // fn test_send_reset() {
-    //     let mut mock_i2c_port = FakeI2cPort::new();
-    //     let mut shub = Wrapper::new_with_interface(
-    //         I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
-    //     let rc = shub.soft_reset();
-    //     let sent_pack = shub.sensor_interface.sent_packets.pop_front().unwrap();
-    //     assert_eq!(sent_pack.len, 5);
-    // }
-
     #[test]
     fn test_handle_adv_message() {
         let mut mock_i2c_port = FakeI2cPort::new();

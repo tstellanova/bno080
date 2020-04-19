@@ -140,15 +140,9 @@ where
         &mut self,
         delay_source: &mut impl DelayMs<u8>,
     ) -> Result<(), Self::SensorError> {
-        // 	digitalWrite(_cs, HIGH); //Deselect BNO080
-        // 	digitalWrite(_wake, HIGH); //Before boot up the PS0/WAK pin must be high to enter SPI mode
-        // 	digitalWrite(_rst, LOW);   //Reset BNO080
-        // 	delay(2);				   //Min length not specified in datasheet?
-        // 	digitalWrite(_rst, HIGH);  //Bring out of reset
 
         // Deselect sensor
         self.csn.set_high().map_err(Error::Pin)?;
-        // self.waken.set_low().map_err(Error::Pin)?;
         // Set WAK / PS0 to high before we reset, in order to select SPI (vs UART) mode
         self.waken.set_high().map_err(Error::Pin)?;
 
@@ -240,7 +234,6 @@ where
             debug_println!("no read_packet");
             return Ok(0);
         }
-
 
         //ensure that the first header bytes are zeroed since we're not sending any data
         for i in recv_buf[..PACKET_HEADER_LENGTH].iter_mut() {
