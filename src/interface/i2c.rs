@@ -98,9 +98,8 @@ where
                     } else {
                         whole_segment_length
                     };
-
-                #[cfg(feature = "rttdebug")]
-                rprintln!("r.s {:x} {}", self.address, segment_read_len);
+                // #[cfg(feature = "rttdebug")]
+                // rprintln!("r.s {:x} {}", self.address, segment_read_len);
 
                 self.zero_recv_packet_header();
                 self.i2c_port
@@ -170,8 +169,8 @@ where
         &mut self,
         delay_source: &mut impl DelayMs<u8>,
     ) -> Result<(), Self::SensorError> {
-        #[cfg(feature = "rttdebug")]
-        rprintln!("i2c setup");
+        // #[cfg(feature = "rttdebug")]
+        // rprintln!("i2c setup");
         delay_source.delay_ms(5);
         Ok(())
     }

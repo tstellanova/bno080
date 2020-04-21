@@ -144,8 +144,8 @@ where
     pub fn eat_one_message(&mut self) -> usize {
         let res = self.receive_packet();
         return if let Ok(received_len) = res {
-            #[cfg(feature = "rttdebug")]
-            rprintln!("e1 {}", received_len);
+            // #[cfg(feature = "rttdebug")]
+            // rprintln!("e1 {}", received_len);
             received_len
         } else {
             #[cfg(feature = "rttdebug")]
@@ -394,6 +394,7 @@ where
     ) -> Result<(), WrapperError<SE>> {
         #[cfg(feature = "rttdebug")]
         rprintln!("wrapper init");
+
         //Section 5.1.1.1 : On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
         delay_source.delay_ms(1u8);
@@ -521,18 +522,21 @@ where
     }
 
     /// Verify that the sensor returns an expected chip ID
-    pub fn verify_product_id(&mut self) -> Result<(), WrapperError<SE>> {
+    fn verify_product_id(&mut self) -> Result<(), WrapperError<SE>> {
         #[cfg(feature = "rttdebug")]
-        rprintln!("v_pid>");
+        rprintln!("request PID...");
         let cmd_body: [u8; 2] = [
             SHUB_PROD_ID_REQ, //request product ID
             0,                //reserved
         ];
 
-        let recv_len = self
-            .send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
-        if recv_len > PACKET_HEADER_LENGTH {
-            self.handle_received_packet(recv_len);
+        self.send_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
+        // process all incoming messages until we get a product id (or no more data)
+        while !self.prod_id_verified {
+            let msg_count = self.handle_one_message();
+            if msg_count < 1 {
+                break;
+            }
         }
 
         if !self.prod_id_verified {
@@ -558,8 +562,8 @@ where
     /// Normally applications should not need to call this directly,
     /// as it is called during `init`.
     pub fn soft_reset(&mut self) -> Result<(), WrapperError<SE>> {
-        #[cfg(feature = "rttdebug")]
-        rprintln!("soft_reset");
+        // #[cfg(feature = "rttdebug")]
+        // rprintln!("soft_reset");
         let data: [u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET];
         // send command packet and ignore received packets
         let received_len =
@@ -578,8 +582,8 @@ where
         body_data: &[u8],
     ) -> Result<usize, WrapperError<SE>> {
         let send_packet_length = self.prep_send_packet(channel, body_data);
-        #[cfg(feature = "rttdebug")]
-        rprintln!("srcv {} ...", send_packet_length);
+        // #[cfg(feature = "rttdebug")]
+        // rprintln!("srcv {} ...", send_packet_length);
 
         let recv_packet_length = self
             .sensor_interface
@@ -643,6 +647,9 @@ const SHUB_REPORT_SET_FEATURE_CMD: u8 = 0xFD;
 // const SHUB_FORCE_SENSOR_FLUSH: u8 = 0xF0;
 const SHUB_COMMAND_RESP: u8 = 0xF1;
 //const SHUB_COMMAND_REQ:u8 =  0xF2;
+
+// some mysterious responses we sometimes get:
+// 0x78, 0x7C
 
 /// Report IDs from SH2 Reference Manual:
 // 0x01 accelerometer (m/s^2 including gravity): Q point 8
