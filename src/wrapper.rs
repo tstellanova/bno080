@@ -368,7 +368,7 @@ where
                     _ => {
                         #[cfg(feature = "rttdebug")]
                         rprintln!(
-                            "unh hbc: 0x{:X} {:?}",
+                            "unh hbc: 0x{:X} {:x?}",
                             report_id,
                             &msg[..PACKET_HEADER_LENGTH]
                         );
@@ -406,12 +406,9 @@ where
         }
 
         delay_source.delay_ms(150u8);
-        self.eat_one_message();
-
-        // self.eat_all_messages(delay_source);
-        // delay_source.delay_ms(100u8);
-        // self.eat_all_messages(delay_source);
-        // delay_source.delay_ms(1u8);
+        self.eat_all_messages(delay_source);
+        delay_source.delay_ms(50u8);
+        self.eat_all_messages(delay_source);
 
         self.verify_product_id()?;
         self.eat_all_messages(delay_source);
@@ -525,6 +522,8 @@ where
 
     /// Verify that the sensor returns an expected chip ID
     pub fn verify_product_id(&mut self) -> Result<(), WrapperError<SE>> {
+        #[cfg(feature = "rttdebug")]
+        rprintln!("v_pid>");
         let cmd_body: [u8; 2] = [
             SHUB_PROD_ID_REQ, //request product ID
             0,                //reserved

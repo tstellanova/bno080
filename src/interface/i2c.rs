@@ -52,8 +52,6 @@ where
 
     fn read_packet_header(&mut self) -> Result<(), Error<CommE, ()>> {
         self.zero_recv_packet_header();
-        // #[cfg(feature = "rttdebug")]
-        // rprintln!("rh");
         self.i2c_port
             .read(self.address, &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH])
             .map_err(Error::Comm)?;
@@ -76,10 +74,8 @@ where
             *byte = 0;
         }
 
-        // bkpt();
-
-        #[cfg(feature = "rttdebug")]
-        rprintln!("r.t {}", total_packet_len);
+        // #[cfg(feature = "rttdebug")]
+        // rprintln!("r.t {}", total_packet_len);
 
         if total_packet_len < MAX_SEGMENT_READ {
             //read directly into the provided receive buffer
@@ -194,10 +190,18 @@ where
         &mut self,
         recv_buf: &mut [u8],
     ) -> Result<usize, Self::SensorError> {
+        // #[cfg(feature = "rttdebug")]
+        // rprintln!("rpkt");
+
         self.read_packet_header()?;
         let packet_len = SensorCommon::parse_packet_header(
             &self.seg_recv_buf[..PACKET_HEADER_LENGTH],
         );
+
+        // if packet_len == 0 {
+        //     #[cfg(feature = "rttdebug")]
+        //     rprintln!("eh {:x?}", &self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
+        // }
 
         let received_len = if packet_len > PACKET_HEADER_LENGTH {
             self.read_sized_packet(packet_len, recv_buf)?
