@@ -15,7 +15,7 @@ For reference, see the original
 - [x] Basic i2c interface support
 - [x] Some tests for decoding and encoding methods
 - [x] Basic SHTP protocol support
-- [ ] SPI support (only stubs at this point)
+- [ ] SPI support (implemented but not passing device testing yet)
 - [ ] CI
 - [ ] Usage examples
 - [ ] Support for calibration 
@@ -24,5 +24,8 @@ For reference, see the original
 - [ ] Support for external light sensor
 
 
+## Examples
 
-
+The bare metal application I've been using to test this
+driver with multiple MCUs is 
+[test_bno080_ehal](https://github.com/tstellanova/test_bno080_ehal)
