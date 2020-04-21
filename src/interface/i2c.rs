@@ -33,6 +33,14 @@ where
         + embedded_hal::blocking::i2c::Read<Error = CommE>
         + embedded_hal::blocking::i2c::WriteRead<Error = CommE>,
 {
+    pub fn default(i2c: I2C) -> Self {
+        Self::new(i2c, DEFAULT_ADDRESS)
+    }
+
+    pub fn alternate(i2c: I2C) -> Self {
+        Self::new(i2c, ALTERNATE_ADDRESS)
+    }
+
     pub fn new(i2c: I2C, addr: u8) -> Self {
         Self {
             i2c_port: i2c,
@@ -44,6 +52,8 @@ where
 
     fn read_packet_header(&mut self) -> Result<(), Error<CommE, ()>> {
         self.zero_recv_packet_header();
+        // #[cfg(feature = "rttdebug")]
+        // rprintln!("rh");
         self.i2c_port
             .read(self.address, &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH])
             .map_err(Error::Comm)?;
@@ -68,6 +78,9 @@ where
 
         // bkpt();
 
+        #[cfg(feature = "rttdebug")]
+        rprintln!("r.t {}", total_packet_len);
+
         if total_packet_len < MAX_SEGMENT_READ {
             //read directly into the provided receive buffer
             if total_packet_len > 0 {
@@ -90,7 +103,8 @@ where
                         whole_segment_length
                     };
 
-                //debug_println!("r.s {:x} {}", self.address, segment_read_len);
+                #[cfg(feature = "rttdebug")]
+                rprintln!("r.s {:x} {}", self.address, segment_read_len);
 
                 self.zero_recv_packet_header();
                 self.i2c_port
@@ -160,12 +174,15 @@ where
         &mut self,
         delay_source: &mut impl DelayMs<u8>,
     ) -> Result<(), Self::SensorError> {
-        delay_source.delay_ms(1);
+        #[cfg(feature = "rttdebug")]
+        rprintln!("i2c setup");
+        delay_source.delay_ms(5);
         Ok(())
     }
 
     fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
-        //debug_println!("w {:x} {}", self.address, packet.len());
+        #[cfg(feature = "rttdebug")]
+        rprintln!("w {:x} {}", self.address, packet.len());
         self.i2c_port
             .write(self.address, &packet)
             .map_err(Error::Comm)?;

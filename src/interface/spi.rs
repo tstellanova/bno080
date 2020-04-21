@@ -27,8 +27,8 @@ pub struct SpiControlLines<SPI, CSN, IN, WAK, RSTN> {
     pub reset: RSTN,
 }
 
-/// This combines the SPI peripheral and associated control pins such as:
-
+/// This combines the SPI peripheral and associated control pins
+///
 pub struct SpiInterface<SPI, CSN, IN, WAK, RSTN> {
     spi: SPI,
     csn: CSN,
@@ -50,6 +50,7 @@ where
     PinE: core::fmt::Debug,
 {
     pub fn new(lines: SpiControlLines<SPI, CSN, IN, WAK, RSTN>) -> Self {
+        //TODO allow some lines to be optional, such as WAK
         Self {
             spi: lines.spi,
             csn: lines.csn,

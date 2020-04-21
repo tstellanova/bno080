@@ -92,14 +92,15 @@ where
 {
     /// Consume all available messages on the port without processing them
     pub fn eat_all_messages(&mut self, delay: &mut impl DelayMs<u8>) {
+        #[cfg(feature = "rttdebug")]
+        rprintln!("eat_n");
         loop {
             let msg_count = self.eat_one_message();
             if msg_count == 0 {
                 break;
-            } else {
-                //give some time to other parts of the system
-                delay.delay_ms(1);
             }
+            //give some time to other parts of the system
+            delay.delay_ms(1);
         }
     }
 
@@ -395,6 +396,7 @@ where
         rprintln!("wrapper init");
         //Section 5.1.1.1 : On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
+        delay_source.delay_ms(1u8);
         self.sensor_interface
             .setup(delay_source)
             .map_err(WrapperError::CommError)?;
@@ -403,10 +405,13 @@ where
             self.soft_reset()?;
         }
 
-        delay_source.delay_ms(50u8);
-        self.eat_all_messages(delay_source);
-        delay_source.delay_ms(100u8);
-        self.eat_all_messages(delay_source);
+        delay_source.delay_ms(150u8);
+        self.eat_one_message();
+
+        // self.eat_all_messages(delay_source);
+        // delay_source.delay_ms(100u8);
+        // self.eat_all_messages(delay_source);
+        // delay_source.delay_ms(1u8);
 
         self.verify_product_id()?;
         self.eat_all_messages(delay_source);
@@ -501,6 +506,9 @@ where
 
     /// Read one packet into the receive buffer
     pub(crate) fn receive_packet(&mut self) -> Result<usize, WrapperError<SE>> {
+        // #[cfg(feature = "rttdebug")]
+        // rprintln!("r_p");
+
         self.packet_recv_buf[0] = 0;
         self.packet_recv_buf[1] = 0;
         let packet_len = self
@@ -509,8 +517,8 @@ where
             .map_err(WrapperError::CommError)?;
 
         self.last_packet_len_received = packet_len;
-        #[cfg(feature = "rttdebug")]
-        rprintln!("recv {}", packet_len);
+        // #[cfg(feature = "rttdebug")]
+        // rprintln!("recv {}", packet_len);
 
         Ok(packet_len)
     }
@@ -555,7 +563,12 @@ where
         rprintln!("soft_reset");
         let data: [u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET];
         // send command packet and ignore received packets
-        self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
+        let received_len =
+            self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
+        if received_len > 0 {
+            self.handle_received_packet(received_len);
+        }
+
         Ok(())
     }
 
@@ -702,17 +715,6 @@ mod tests {
         let next_packet_size = rc.unwrap_or(0);
         assert_eq!(next_packet_size, packet.len(), "wrong length");
     }
-
-    // //TODO give access to sent packets for testing porpoises
-    // #[test]
-    // fn test_send_reset() {
-    //     let mut mock_i2c_port = FakeI2cPort::new();
-    //     let mut shub = Wrapper::new_with_interface(
-    //         I2cInterface::new(mock_i2c_port, DEFAULT_ADDRESS));
-    //     let rc = shub.soft_reset();
-    //     let sent_pack = shub.sensor_interface.sent_packets.pop_front().unwrap();
-    //     assert_eq!(sent_pack.len, 5);
-    // }
 
     #[test]
     fn test_handle_adv_message() {
