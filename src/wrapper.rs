@@ -551,6 +551,8 @@ where
     /// Normally applications should not need to call this directly,
     /// as it is called during `init`.
     pub fn soft_reset(&mut self) -> Result<(), WrapperError<SE>> {
+        #[cfg(feature = "rttdebug")]
+        rprintln!("soft_reset");
         let data: [u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET];
         // send command packet and ignore received packets
         self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
