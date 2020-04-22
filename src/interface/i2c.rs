@@ -184,6 +184,31 @@ where
         Ok(())
     }
 
+    fn read_with_timeout(
+        &mut self,
+        recv_buf: &mut [u8],
+        delay_source: &mut impl DelayMs<u8>,
+        max_ms: u8,
+    ) -> Result<usize, Self::SensorError> {
+        let mut total_delay: u8 = 0;
+        while total_delay < max_ms {
+            match self.read_packet(recv_buf) {
+                Ok(read_size) => {
+                    if 0 == read_size {
+                        // no data available yet...wait a while longer
+                        delay_source.delay_ms(1);
+                        total_delay += 1;
+                    } else {
+                        return Ok(read_size);
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(0)
+    }
+
     /// Read one packet into the receive buffer
     fn read_packet(
         &mut self,

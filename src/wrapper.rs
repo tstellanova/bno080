@@ -95,7 +95,7 @@ where
         #[cfg(feature = "rttdebug")]
         rprintln!("eat_n");
         loop {
-            let msg_count = self.eat_one_message();
+            let msg_count = self.eat_one_message(delay);
             if msg_count == 0 {
                 break;
             }
@@ -104,7 +104,7 @@ where
         }
     }
 
-    pub fn handle_all_messages(&mut self, delay: &mut dyn DelayMs<u8>) -> u32 {
+    pub fn handle_all_messages(&mut self, delay: &mut impl DelayMs<u8>) -> u32 {
         let mut total_handled: u32 = 0;
         loop {
             let handled_count = self.handle_one_message();
@@ -141,8 +141,8 @@ where
     /// Receive and ignore one message,
     /// returning the size of the packet received or zero
     /// if there was no packet to read.
-    pub fn eat_one_message(&mut self) -> usize {
-        let res = self.receive_packet();
+    pub fn eat_one_message(&mut self, delay: &mut impl DelayMs<u8>) -> usize {
+        let res = self.receive_packet_with_timeout(delay, 150);
         return if let Ok(received_len) = res {
             #[cfg(feature = "rttdebug")]
             rprintln!("e1 {}", received_len);
@@ -409,9 +409,11 @@ where
             delay_source.delay_ms(50u8);
             self.eat_all_messages(delay_source);
         } else {
-            self.eat_all_messages(delay_source);
-            self.eat_all_messages(delay_source);
-            self.eat_all_messages(delay_source);
+            // we only expect two messages after reset:
+            // eat the advertisement response
+            self.eat_one_message(delay_source);
+            // eat the unsolicited initialization response
+            self.eat_one_message(delay_source);
         }
 
         self.verify_product_id()?;
@@ -506,6 +508,29 @@ where
     }
 
     /// Read one packet into the receive buffer
+    pub(crate) fn receive_packet_with_timeout(
+        &mut self,
+        delay: &mut impl DelayMs<u8>,
+        max_ms: u8,
+    ) -> Result<usize, WrapperError<SE>> {
+        // #[cfg(feature = "rttdebug")]
+        // rprintln!("r_p");
+
+        self.packet_recv_buf[0] = 0;
+        self.packet_recv_buf[1] = 0;
+        let packet_len = self
+            .sensor_interface
+            .read_with_timeout(&mut self.packet_recv_buf, delay, max_ms)
+            .map_err(WrapperError::CommError)?;
+
+        self.last_packet_len_received = packet_len;
+        #[cfg(feature = "rttdebug")]
+        rprintln!("recv {}", packet_len);
+
+        Ok(packet_len)
+    }
+
+    /// Read one packet into the receive buffer
     pub(crate) fn receive_packet(&mut self) -> Result<usize, WrapperError<SE>> {
         // #[cfg(feature = "rttdebug")]
         // rprintln!("r_p");
@@ -533,7 +558,12 @@ where
             0,                //reserved
         ];
 
-        self.send_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
+        let response_size = self
+            .send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
+        if response_size > 0 {
+            self.handle_received_packet(response_size);
+        }
+
         // process all incoming messages until we get a product id (or no more data)
         while !self.prod_id_verified {
             let msg_count = self.handle_one_message();

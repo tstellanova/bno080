@@ -34,6 +34,15 @@ pub trait SensorInterface {
         recv_buf: &mut [u8],
     ) -> Result<usize, Self::SensorError>;
 
+    /// Wait for sensor to indicate it has data available before reading
+    /// - `max_ms` maximum number of milliseconds to wait for data
+    fn read_with_timeout(
+        &mut self,
+        recv_buf: &mut [u8],
+        delay_source: &mut impl DelayMs<u8>,
+        max_ms: u8,
+    ) -> Result<usize, Self::SensorError>;
+
     /// Send a packet and receive the response immediately
     fn send_and_receive_packet(
         &mut self,

@@ -71,12 +71,13 @@ where
     /// Wait for sensor to be ready.
     /// After reset this can take around 120 ms
     /// Return true if the sensor is awake, false if it doesn't wake up
+    /// `max_ms` maximum milliseconds to await for HINTN change
     fn wait_for_sensor_awake(
         &mut self,
         delay_source: &mut impl DelayMs<u8>,
+        max_ms: u8,
     ) -> bool {
-        // We allow up to 200 milliseconds
-        for _ in 0..200 {
+        for _ in 0..max_ms {
             if self.hintn_signaled() {
                 return true;
             }
@@ -164,7 +165,7 @@ where
         self.reset.set_high().map_err(Error::Pin)?;
 
         // wait for sensor to set hintn pin after reset
-        let ready = self.wait_for_sensor_awake(delay_source);
+        let ready = self.wait_for_sensor_awake(delay_source, 200u8);
         if !ready {
             #[cfg(feature = "rttdebug")]
             rprintln!("sensor not ready");
@@ -245,7 +246,7 @@ where
         &mut self,
         recv_buf: &mut [u8],
     ) -> Result<usize, Self::SensorError> {
-        // Note: HINTN cannot be used to detect data ready.
+        // Note: HINTN cannot always be used to detect data ready.
         // As soon as host selects CSN, HINTN resets
 
         //Zero the header bytes are zeroed since we're not sending any data
@@ -277,5 +278,17 @@ where
         }
 
         Ok(packet_len)
+    }
+
+    fn read_with_timeout(
+        &mut self,
+        recv_buf: &mut [u8],
+        delay_source: &mut impl DelayMs<u8>,
+        max_ms: u8,
+    ) -> Result<usize, Self::SensorError> {
+        if self.wait_for_sensor_awake(delay_source, max_ms) {
+            return self.read_packet(recv_buf);
+        }
+        Ok(0)
     }
 }
