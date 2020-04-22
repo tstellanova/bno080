@@ -104,10 +104,15 @@ where
         }
     }
 
-    pub fn handle_all_messages(&mut self, delay: &mut impl DelayMs<u8>) -> u32 {
+    /// Handle any messages with a timeout
+    pub fn handle_all_messages(
+        &mut self,
+        delay: &mut impl DelayMs<u8>,
+        timeout_ms: u8,
+    ) -> u32 {
         let mut total_handled: u32 = 0;
         loop {
-            let handled_count = self.handle_one_message();
+            let handled_count = self.handle_one_message(delay, timeout_ms);
             if handled_count == 0 {
                 break;
             } else {
@@ -120,10 +125,14 @@ where
     }
 
     /// return the number of messages handled
-    pub fn handle_one_message(&mut self) -> u32 {
+    pub fn handle_one_message(
+        &mut self,
+        delay: &mut impl DelayMs<u8>,
+        max_ms: u8,
+    ) -> u32 {
         let mut msg_count = 0;
 
-        let res = self.receive_packet();
+        let res = self.receive_packet_with_timeout(delay, max_ms);
         if res.is_ok() {
             let received_len = res.unwrap_or(0);
             if received_len > 0 {
@@ -357,7 +366,17 @@ where
                     }
                     SHUB_PROD_ID_RESP => {
                         #[cfg(feature = "rttdebug")]
-                        rprintln!("PID_RESP {}", 1);
+                        {
+                            //let reset_cause = msg[4 + 1];
+                            let sw_vers_major = msg[4 + 2];
+                            let sw_vers_minor = msg[4 + 3];
+                            rprintln!(
+                                "PID_RESP {}.{}",
+                                sw_vers_major,
+                                sw_vers_minor
+                            );
+                        }
+
                         self.prod_id_verified = true;
                     }
                     SHUB_GET_FEATURE_RESP => {
@@ -403,6 +422,7 @@ where
             .map_err(WrapperError::CommError)?;
 
         if self.sensor_interface.requires_soft_reset() {
+            delay_source.delay_ms(1u8);
             self.soft_reset()?;
             delay_source.delay_ms(150u8);
             self.eat_all_messages(delay_source);
@@ -416,7 +436,7 @@ where
             self.eat_one_message(delay_source);
         }
 
-        self.verify_product_id()?;
+        self.verify_product_id(delay_source)?;
         self.eat_all_messages(delay_source);
 
         Ok(())
@@ -524,33 +544,17 @@ where
             .map_err(WrapperError::CommError)?;
 
         self.last_packet_len_received = packet_len;
-        #[cfg(feature = "rttdebug")]
-        rprintln!("recv {}", packet_len);
-
-        Ok(packet_len)
-    }
-
-    /// Read one packet into the receive buffer
-    pub(crate) fn receive_packet(&mut self) -> Result<usize, WrapperError<SE>> {
         // #[cfg(feature = "rttdebug")]
-        // rprintln!("r_p");
-
-        self.packet_recv_buf[0] = 0;
-        self.packet_recv_buf[1] = 0;
-        let packet_len = self
-            .sensor_interface
-            .read_packet(&mut self.packet_recv_buf)
-            .map_err(WrapperError::CommError)?;
-
-        self.last_packet_len_received = packet_len;
-        #[cfg(feature = "rttdebug")]
-        rprintln!("recv {}", packet_len);
+        // rprintln!("recv {}", packet_len);
 
         Ok(packet_len)
     }
 
     /// Verify that the sensor returns an expected chip ID
-    fn verify_product_id(&mut self) -> Result<(), WrapperError<SE>> {
+    fn verify_product_id(
+        &mut self,
+        delay: &mut impl DelayMs<u8>,
+    ) -> Result<(), WrapperError<SE>> {
         #[cfg(feature = "rttdebug")]
         rprintln!("request PID...");
         let cmd_body: [u8; 2] = [
@@ -558,15 +562,24 @@ where
             0,                //reserved
         ];
 
-        let response_size = self
-            .send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
-        if response_size > 0 {
-            self.handle_received_packet(response_size);
-        }
+        // for some reason, reading PID right sending request does not work with i2c
+        if self.sensor_interface.requires_soft_reset() {
+            self.send_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
+        } else {
+            let response_size = self.send_and_receive_packet(
+                CHANNEL_HUB_CONTROL,
+                cmd_body.as_ref(),
+            )?;
+            if response_size > 0 {
+                self.handle_received_packet(response_size);
+            }
+        };
 
         // process all incoming messages until we get a product id (or no more data)
         while !self.prod_id_verified {
-            let msg_count = self.handle_one_message();
+            #[cfg(feature = "rttdebug")]
+            rprintln!("re-read PID");
+            let msg_count = self.handle_one_message(delay, 150u8);
             if msg_count < 1 {
                 break;
             }

@@ -147,7 +147,11 @@ where
     }
 
     fn zero_recv_packet_header(&mut self) {
-        for byte in &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH] {
+        Self::zero_buffer(&mut self.seg_recv_buf[..PACKET_HEADER_LENGTH]);
+    }
+
+    fn zero_buffer(buf: &mut [u8]) {
+        for byte in buf.as_mut() {
             *byte = 0;
         }
     }
@@ -254,6 +258,8 @@ where
             .map_err(Error::Comm)?;
 
         self.zero_recv_packet_header();
+        //stall before attempted read?
+        Self::zero_buffer(recv_buf);
 
         self.i2c_port
             .read(self.address, &mut self.seg_recv_buf[..PACKET_HEADER_LENGTH])
