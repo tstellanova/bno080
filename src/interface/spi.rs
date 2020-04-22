@@ -64,38 +64,32 @@ where
     /// Is the sensor indicating it has data available
     /// "In SPI and I2C mode the HOST_INTN signal is used by the BNO080 to
     /// indicate to the application processor that the BNO080 needs attention."
-    fn interrupt_signaled(&self) -> bool {
+    fn hintn_signaled(&self) -> bool {
         self.hintn.is_low().unwrap_or(false)
     }
 
     /// Wait for sensor to be ready.
     /// After reset this can take around 120 ms
+    /// Return true if the sensor is awake, false if it doesn't wake up
     fn wait_for_sensor_awake(
         &mut self,
         delay_source: &mut impl DelayMs<u8>,
     ) -> bool {
-        self.wait_for_interrupt_signal(200, delay_source)
-    }
-
-    /// Return true if the sensor is ready to provide data
-    /// Time out after `max_ms` milliseconds
-    fn wait_for_interrupt_signal(
-        &mut self,
-        max_ms: u8,
-        delay_source: &mut impl DelayMs<u8>,
-    ) -> bool {
-        for _ in 0..max_ms {
-            if self.interrupt_signaled() {
+        // We allow up to 200 milliseconds
+        for _ in 0..200 {
+            if self.hintn_signaled() {
                 return true;
             }
             delay_source.delay_ms(1);
         }
+
         false
     }
 
+    /// block on HINTN for n cycles
     fn block_on_hintn(&mut self, max_cycles: usize) -> bool {
         for _ in 0..max_cycles {
-            if self.interrupt_signaled() {
+            if self.hintn_signaled() {
                 return true;
             }
         }
@@ -154,21 +148,19 @@ where
         &mut self,
         delay_source: &mut impl DelayMs<u8>,
     ) -> Result<(), Self::SensorError> {
-        // 	digitalWrite(_cs, HIGH); //Deselect BNO080
-        // 	digitalWrite(_wake, HIGH); //Before boot up the PS0/WAK pin must be high to enter SPI mode
-        // 	digitalWrite(_rst, LOW);   //Reset BNO080
-        // 	delay(2);				   //Min length not specified in datasheet?
-        // 	digitalWrite(_rst, HIGH);  //Bring out of reset
-
         // Deselect sensor
         self.csn.set_high().map_err(Error::Pin)?;
-        // self.waken.set_low().map_err(Error::Pin)?;
         // Set WAK / PS0 to high before we reset, in order to select SPI (vs UART) mode
         self.waken.set_high().map_err(Error::Pin)?;
+        // should already be high by default, but just in case...
+        self.reset.set_high().map_err(Error::Pin)?;
 
+        // #[cfg(feature = "rttdebug")]
+        // rprintln!("reset cycle... ");
         // reset cycle
+
         self.reset.set_low().map_err(Error::Pin)?;
-        delay_source.delay_ms(10);
+        delay_source.delay_ms(2);
         self.reset.set_high().map_err(Error::Pin)?;
 
         // wait for sensor to set hintn pin after reset
@@ -176,7 +168,6 @@ where
         if !ready {
             #[cfg(feature = "rttdebug")]
             rprintln!("sensor not ready");
-
             return Err(SensorUnresponsive);
         }
 
@@ -254,14 +245,10 @@ where
         &mut self,
         recv_buf: &mut [u8],
     ) -> Result<usize, Self::SensorError> {
-        //detect whether the sensor is ready to send data
-        if !self.interrupt_signaled() {
-            #[cfg(feature = "rttdebug")]
-            rprintln!("no read_packet");
-            return Ok(0);
-        }
+        // Note: HINTN cannot be used to detect data ready.
+        // As soon as host selects CSN, HINTN resets
 
-        //ensure that the first header bytes are zeroed since we're not sending any data
+        //Zero the header bytes are zeroed since we're not sending any data
         for i in recv_buf[..PACKET_HEADER_LENGTH].iter_mut() {
             *i = 0;
         }

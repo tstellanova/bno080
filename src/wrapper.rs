@@ -144,12 +144,12 @@ where
     pub fn eat_one_message(&mut self) -> usize {
         let res = self.receive_packet();
         return if let Ok(received_len) = res {
-            // #[cfg(feature = "rttdebug")]
-            // rprintln!("e1 {}", received_len);
+            #[cfg(feature = "rttdebug")]
+            rprintln!("e1 {}", received_len);
             received_len
         } else {
             #[cfg(feature = "rttdebug")]
-            rprintln!("eat1 err {:?}", res);
+            rprintln!("e1 err {:?}", res);
             0
         };
     }
@@ -401,15 +401,18 @@ where
         self.sensor_interface
             .setup(delay_source)
             .map_err(WrapperError::CommError)?;
-        delay_source.delay_ms(1u8);
+
         if self.sensor_interface.requires_soft_reset() {
             self.soft_reset()?;
+            delay_source.delay_ms(150u8);
+            self.eat_all_messages(delay_source);
+            delay_source.delay_ms(50u8);
+            self.eat_all_messages(delay_source);
+        } else {
+            self.eat_all_messages(delay_source);
+            self.eat_all_messages(delay_source);
+            self.eat_all_messages(delay_source);
         }
-
-        delay_source.delay_ms(150u8);
-        self.eat_all_messages(delay_source);
-        delay_source.delay_ms(50u8);
-        self.eat_all_messages(delay_source);
 
         self.verify_product_id()?;
         self.eat_all_messages(delay_source);
@@ -515,8 +518,8 @@ where
             .map_err(WrapperError::CommError)?;
 
         self.last_packet_len_received = packet_len;
-        // #[cfg(feature = "rttdebug")]
-        // rprintln!("recv {}", packet_len);
+        #[cfg(feature = "rttdebug")]
+        rprintln!("recv {}", packet_len);
 
         Ok(packet_len)
     }

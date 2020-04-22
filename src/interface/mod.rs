@@ -83,9 +83,6 @@ impl SensorCommon {
             // hprintln!("pph: {:?} {} ", &packet[..PACKET_HEADER_LENGTH], packet_len).unwrap();
         }
 
-        //let is_continuation:bool = (packet[1] & 0x80) != 0;
-        //let chan_num =  packet[2];
-        //let seq_num =  packet[3];
         packet_len
     }
 }

@@ -15,7 +15,7 @@ impl DummyOutputPin {
 }
 
 impl OutputPin for DummyOutputPin {
-    type Error = ();
+    type Error = core::convert::Infallible;
 
     fn set_low(&mut self) -> Result<(), Self::Error> {
         self.state = false;
