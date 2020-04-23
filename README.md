@@ -15,9 +15,9 @@ For reference, see the original
 - [x] Basic i2c interface support
 - [x] Some tests for decoding and encoding methods
 - [x] Basic SHTP protocol support
-- [ ] SPI support (implemented but not passing device testing yet)
+- [x] Basic SPI support
+- [x] [Usage examples](https://github.com/tstellanova/test_bno080_ehal)
 - [ ] CI
-- [ ] Usage examples
 - [ ] Support for calibration 
 - [ ] Support for tare
 - [ ] Support for external barometer (eg bmp280)
