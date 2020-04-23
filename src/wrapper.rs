@@ -437,7 +437,7 @@ where
         }
 
         self.verify_product_id(delay_source)?;
-        self.eat_all_messages(delay_source);
+        //self.eat_all_messages(delay_source);
 
         Ok(())
     }
@@ -578,7 +578,7 @@ where
         // process all incoming messages until we get a product id (or no more data)
         while !self.prod_id_verified {
             #[cfg(feature = "rttdebug")]
-            rprintln!("re-read PID");
+            rprintln!("read PID");
             let msg_count = self.handle_one_message(delay, 150u8);
             if msg_count < 1 {
                 break;
