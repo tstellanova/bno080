@@ -17,45 +17,39 @@ use panic_rtt_core::rprintln;
 /// - MOSI: Output from the master to the sensor
 /// - CSN: chip select line that selects the device on the shared SPI bus
 /// - HINTN: Hardware Interrupt. Sensor uses this to indicate it had data available for read
-/// - WAK: Wake pin.  Master asserts this to choose SPI mode, then deasserts to wake up the sensor.
 /// - RSTN: Reset the device
-pub struct SpiControlLines<SPI, CSN, IN, WAK, RSTN> {
+pub struct SpiControlLines<SPI, CSN, IN, RSTN> {
     pub spi: SPI,
     pub csn: CSN,
     pub hintn: IN,
-    pub waken: WAK,
     pub reset: RSTN,
 }
 
 /// This combines the SPI peripheral and associated control pins
 ///
-pub struct SpiInterface<SPI, CSN, IN, WAK, RSTN> {
+pub struct SpiInterface<SPI, CSN, IN, RSTN> {
     spi: SPI,
     csn: CSN,
     hintn: IN,
-    waken: WAK,
     reset: RSTN,
     received_packet_count: usize,
 }
 
-impl<SPI, CSN, IN, WAK, RSTN, CommE, PinE> SpiInterface<SPI, CSN, IN, WAK, RSTN>
+impl<SPI, CSN, IN, RSTN, CommE, PinE> SpiInterface<SPI, CSN, IN, RSTN>
 where
     SPI: embedded_hal::blocking::spi::Write<u8, Error = CommE>
         + embedded_hal::blocking::spi::Transfer<u8, Error = CommE>,
     CSN: OutputPin<Error = PinE>,
     IN: InputPin<Error = PinE>,
-    WAK: OutputPin<Error = PinE>,
     RSTN: OutputPin<Error = PinE>,
     CommE: core::fmt::Debug,
     PinE: core::fmt::Debug,
 {
-    pub fn new(lines: SpiControlLines<SPI, CSN, IN, WAK, RSTN>) -> Self {
-        //TODO allow some lines to be optional, such as WAK
+    pub fn new(lines: SpiControlLines<SPI, CSN, IN, RSTN>) -> Self {
         Self {
             spi: lines.spi,
             csn: lines.csn,
             hintn: lines.hintn,
-            waken: lines.waken,
             reset: lines.reset,
             received_packet_count: 0,
         }
@@ -127,14 +121,13 @@ where
     }
 }
 
-impl<SPI, CSN, IN, WAK, RS, CommE, PinE> SensorInterface
-    for SpiInterface<SPI, CSN, IN, WAK, RS>
+impl<SPI, CSN, IN, RS, CommE, PinE> SensorInterface
+    for SpiInterface<SPI, CSN, IN, RS>
 where
     SPI: embedded_hal::blocking::spi::Write<u8, Error = CommE>
         + embedded_hal::blocking::spi::Transfer<u8, Error = CommE>,
     CSN: OutputPin<Error = PinE>,
     IN: InputPin<Error = PinE>,
-    WAK: OutputPin<Error = PinE>,
     RS: OutputPin<Error = PinE>,
     CommE: core::fmt::Debug,
     PinE: core::fmt::Debug,
@@ -151,8 +144,8 @@ where
     ) -> Result<(), Self::SensorError> {
         // Deselect sensor
         self.csn.set_high().map_err(Error::Pin)?;
-        // Set WAK / PS0 to high before we reset, in order to select SPI (vs UART) mode
-        self.waken.set_high().map_err(Error::Pin)?;
+        // Note: This assumes that WAK/PS0 is set to high already
+        //TODO allow the user to provide a WAK pin
         // should already be high by default, but just in case...
         self.reset.set_high().map_err(Error::Pin)?;
 

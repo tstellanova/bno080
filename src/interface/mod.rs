@@ -4,8 +4,6 @@ pub mod spi;
 #[cfg(test)]
 pub mod mock_i2c_port;
 
-pub mod dummy_output_pin;
-
 use core::ops::Shl;
 
 use embedded_hal::blocking::delay::DelayMs;
