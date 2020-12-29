@@ -195,13 +195,23 @@ where
         val
     }
 
+    fn try_read_i16_at_cursor(msg: &[u8], cursor: &mut usize) -> Option<i16> {
+        let remaining = msg.len() - *cursor;
+        if remaining >= 2 {
+            let val = (msg[*cursor] as i16) | ((msg[*cursor + 1] as i16) << 8);
+            *cursor += 2;
+            Some(val)
+        } else {
+            None
+        }
+    }
+
     /// Read data values from a single input report
     fn handle_one_input_report(
         outer_cursor: usize,
         msg: &[u8],
     ) -> (usize, u8, i16, i16, i16, i16, i16) {
         let mut cursor = outer_cursor;
-        let remaining = msg.len() - cursor;
 
         let feature_report_id = Self::read_u8_at_cursor(msg, &mut cursor);
         let _rep_seq_num = Self::read_u8_at_cursor(msg, &mut cursor);
@@ -211,16 +221,8 @@ where
         let data1: i16 = Self::read_i16_at_cursor(msg, &mut cursor);
         let data2: i16 = Self::read_i16_at_cursor(msg, &mut cursor);
         let data3: i16 = Self::read_i16_at_cursor(msg, &mut cursor);
-        let data4: i16 = if remaining > 14 {
-            Self::read_i16_at_cursor(msg, &mut cursor)
-        } else {
-            0
-        };
-        let data5: i16 = if remaining > 16 {
-            Self::read_i16_at_cursor(msg, &mut cursor)
-        } else {
-            0
-        };
+        let data4: i16 = Self::try_read_i16_at_cursor(msg, &mut cursor).unwrap_or(0);
+        let data5: i16 = Self::try_read_i16_at_cursor(msg, &mut cursor).unwrap_or(0);
 
         (cursor, feature_report_id, data1, data2, data3, data4, data5)
     }
