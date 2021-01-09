@@ -83,6 +83,11 @@ impl<SI> BNO080<SI> {
             rot_quaternion_acc: 0.0,
         }
     }
+
+    /// Returns previously consumed serial sensor instance.
+    pub fn free(self) -> SI {
+        self.sensor_interface
+    }
 }
 
 impl<SI, SE> BNO080<SI>
