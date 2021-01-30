@@ -60,6 +60,12 @@ pub struct BNO080<SI> {
     rotation_quaternion: [f32; 4],
     /// Heading accuracy of rotation vector (radians)
     rot_quaternion_acc: f32,
+
+    /// Linear acceleration vector
+    linear_accel: [f32; 3],
+
+    /// Gyroscope calibrated data
+    gyro: [f32; 3],
 }
 
 impl<SI> BNO080<SI> {
@@ -81,6 +87,8 @@ impl<SI> BNO080<SI> {
             last_command_chan_rid: 0,
             rotation_quaternion: [0.0; 4],
             rot_quaternion_acc: 0.0,
+            linear_accel: [0.0; 3],
+            gyro: [0.0; 3],
         }
     }
 
@@ -226,8 +234,10 @@ where
         let data1: i16 = Self::read_i16_at_cursor(msg, &mut cursor);
         let data2: i16 = Self::read_i16_at_cursor(msg, &mut cursor);
         let data3: i16 = Self::read_i16_at_cursor(msg, &mut cursor);
-        let data4: i16 = Self::try_read_i16_at_cursor(msg, &mut cursor).unwrap_or(0);
-        let data5: i16 = Self::try_read_i16_at_cursor(msg, &mut cursor).unwrap_or(0);
+        let data4: i16 =
+            Self::try_read_i16_at_cursor(msg, &mut cursor).unwrap_or(0);
+        let data5: i16 =
+            Self::try_read_i16_at_cursor(msg, &mut cursor).unwrap_or(0);
 
         (cursor, feature_report_id, data1, data2, data3, data4, data5)
     }
@@ -277,6 +287,12 @@ where
                         data1, data2, data3, data4, data5,
                     );
                 }
+                SENSOR_REPORTID_LINEAR_ACCEL => {
+                    self.update_linear_accel(data1, data2, data3);
+                }
+                SENSOR_REPORTID_GYRO => {
+                    self.update_gyro_cal(data1, data2, data3);
+                }
                 _ => {
                     // debug_println!("uhr: {:X}", report_id);
                     // debug_println!("uhr: 0x{:X} {:?}  ", report_id, &self.packet_recv_buf[start_cursor..start_cursor+5]);
@@ -305,6 +321,26 @@ where
             q14_to_f32(q_r),
         ];
         self.rot_quaternion_acc = q12_to_f32(q_a);
+    }
+
+    /// Given a set of linear acceleration values in the Q-fixed-point format,
+    /// calculate and update the corresponding float values
+    fn update_linear_accel(&mut self, x: i16, y: i16, z: i16) {
+        let x = q8_to_f32(x);
+        let y = q8_to_f32(y);
+        let z = q8_to_f32(z);
+
+        self.linear_accel = [x, y, z];
+    }
+
+    /// Given a set of linear acceleration values in the Q-fixed-point format,
+    /// calculate and update the corresponding float values
+    fn update_gyro_cal(&mut self, x: i16, y: i16, z: i16) {
+        let x = q9_to_f32(x);
+        let y = q9_to_f32(y);
+        let z = q9_to_f32(z);
+
+        self.gyro = [x, y, z];
     }
 
     /// Handle one or more errors sent in response to a command
@@ -462,6 +498,22 @@ where
         )
     }
 
+    /// Enables reporting of linear acceleration vector.
+    pub fn enable_linear_accel(
+        &mut self,
+        millis_between_reports: u16,
+    ) -> Result<(), WrapperError<SE>> {
+        self.enable_report(SENSOR_REPORTID_LINEAR_ACCEL, millis_between_reports)
+    }
+
+    /// Enables reporting of gyroscope data.
+    pub fn enable_gyro(
+        &mut self,
+        millis_between_reports: u16,
+    ) -> Result<(), WrapperError<SE>> {
+        self.enable_report(SENSOR_REPORTID_GYRO, millis_between_reports)
+    }
+
     /// Enable a particular report
     fn enable_report(
         &mut self,
@@ -611,6 +663,16 @@ where
         self.rot_quaternion_acc
     }
 
+    /// Read linear acceleration (m/s^2)
+    pub fn linear_accel(&self) -> Result<[f32; 3], WrapperError<SE>> {
+        Ok(self.linear_accel)
+    }
+
+    /// Read gyroscope data (rad/s)
+    pub fn gyro(&self) -> Result<[f32; 3], WrapperError<SE>> {
+        Ok(self.gyro)
+    }
+
     /// Tell the sensor to reset.
     /// Normally applications should not need to call this directly,
     /// as it is called during `init`.
@@ -653,6 +715,8 @@ where
     }
 }
 
+const Q8_SCALE: f32 = 1.0 / ((1 << 8) as f32);
+const Q9_SCALE: f32 = 1.0 / ((1 << 9) as f32);
 const Q12_SCALE: f32 = 1.0 / ((1 << 12) as f32);
 const Q14_SCALE: f32 = 1.0 / ((1 << 14) as f32);
 
@@ -664,6 +728,14 @@ fn q14_to_f32(q_val: i16) -> f32 {
 
 fn q12_to_f32(q_val: i16) -> f32 {
     (q_val as f32) * Q12_SCALE
+}
+
+fn q8_to_f32(q_val: i16) -> f32 {
+    (q_val as f32) * Q8_SCALE
+}
+
+fn q9_to_f32(q_val: i16) -> f32 {
+    (q_val as f32) * Q9_SCALE
 }
 
 // The BNO080 supports six communication channels:
@@ -708,10 +780,14 @@ const SHUB_COMMAND_RESP: u8 = 0xF1;
 // 0x01 accelerometer (m/s^2 including gravity): Q point 8
 // 0x02 gyroscope calibrated (rad/s): Q point 9
 // 0x03 mag field calibrated (uTesla): Q point 4
-// 0x04 linear acceleration (m/s^2 minus gravity): Q point 8
+/// Linear acceleration (m/s^2 minus gravity): Q point 8
+const SENSOR_REPORTID_LINEAR_ACCEL: u8 = 0x04;
+
 /// Unit quaternion rotation vector, Q point 12, with heading accuracy estimate (radians)
 const SENSOR_REPORTID_ROTATION_VECTOR: u8 = 0x05;
 // const SENSOR_REPORTID_GRAVITY: u8 = 0x06; // Q point 8
+/// Gyroscope uncalibrated (rad/s): Q point 9
+const SENSOR_REPORTID_GYRO: u8 = 0x07;
 // 0x08 game rotation vector : Q point 14
 // 0x09 geomagnetic rotation vector: Q point 14 for quaternion, Q point 12 for heading accuracy
 // 0x0A pressure (hectopascals) from external baro: Q point 20
