@@ -50,6 +50,10 @@ where
         }
     }
 
+    pub fn free(self) -> I2C {
+        self.i2c_port
+    }
+
     fn read_packet_header(&mut self) -> Result<(), Error<CommE, ()>> {
         self.zero_recv_packet_header();
         self.i2c_port
