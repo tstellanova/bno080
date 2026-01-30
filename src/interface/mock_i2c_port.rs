@@ -3,19 +3,16 @@ extern crate std;
 use super::PACKET_HEADER_LENGTH;
 
 use core::ops::Shr;
-use embedded_hal::blocking::{
-    delay::DelayMs,
-    i2c::{Read, Write, WriteRead},
-};
+use embedded_hal::i2c::I2c;
 use std::collections::VecDeque;
 
-struct FakeDelay {}
+// struct FakeDelay {}
 
-impl DelayMs<u8> for FakeDelay {
-    fn delay_ms(&mut self, _ms: u8) {
-        // no-op
-    }
-}
+// impl DelayMs<u8> for FakeDelay {
+//     fn delay_ms(&mut self, _ms: u8) {
+//         // no-op
+//     }
+// }
 
 const MAX_FAKE_PACKET_SIZE: usize = 512;
 
@@ -59,9 +56,7 @@ impl FakeI2cPort {
     }
 }
 
-impl Read for FakeI2cPort {
-    type Error = ();
-
+impl I2c for FakeI2cPort {
     fn read(&mut self, addr: u8, buffer: &mut [u8]) -> Result<(), Self::Error> {
         let next_pack =
             self.available_packets.pop_front().unwrap_or(FakePacket {
@@ -109,10 +104,12 @@ impl Read for FakeI2cPort {
     }
 }
 
-impl Write for FakeI2cPort {
-    type Error = ();
-
-    fn write(&mut self, _addr: u8, _bytes: &[u8]) -> Result<(), Self::Error> {
+impl I2c for FakeI2cPort {
+    fn transaction(
+        &mut self,
+        address: u8,
+        operations: &mut [embedded_hal::i2c::Operation<'_>],
+    ) -> Result<(), Self::Error> {
         let sent_pack = FakePacket::new_from_slice(_bytes);
         self.sent_packets.push_back(sent_pack);
         Ok(())
