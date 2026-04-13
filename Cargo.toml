@@ -13,7 +13,9 @@ readme = "README.md"
 [dependencies]
 embedded-hal = { version = "1" }
 panic-rtt-core = { version = "0.2.1", optional = true }
+embedded-hal-async = { version = "1", optional = true }
 
 [features]
 default = []
 rttdebug = ["panic-rtt-core"]
+async = ["embedded-hal-async"]
