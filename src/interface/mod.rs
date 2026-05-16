@@ -1,4 +1,5 @@
 pub mod i2c;
+mod i2c_common;
 pub mod spi;
 
 #[cfg(feature = "async")]
