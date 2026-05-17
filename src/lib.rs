@@ -7,6 +7,8 @@ LICENSE: BSD3 (see LICENSE file)
 
 pub mod interface;
 pub mod wrapper;
+#[cfg(feature = "async")]
+pub mod wrapper_async;
 
 /// Errors in this crate
 #[derive(Debug)]

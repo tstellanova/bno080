@@ -3,16 +3,8 @@ extern crate std;
 use super::PACKET_HEADER_LENGTH;
 
 use core::ops::Shr;
-use embedded_hal::i2c::I2c;
+use embedded_hal::i2c::{I2c, Operation};
 use std::collections::VecDeque;
-
-// struct FakeDelay {}
-
-// impl DelayMs<u8> for FakeDelay {
-//     fn delay_ms(&mut self, _ms: u8) {
-//         // no-op
-//     }
-// }
 
 const MAX_FAKE_PACKET_SIZE: usize = 512;
 
@@ -41,6 +33,19 @@ pub struct FakeI2cPort {
     pub sent_packets: VecDeque<FakePacket>,
 }
 
+#[derive(Debug)]
+pub struct FakeI2cError;
+
+impl embedded_hal::i2c::Error for FakeI2cError {
+    fn kind(&self) -> embedded_hal::i2c::ErrorKind {
+        embedded_hal::i2c::ErrorKind::Other
+    }
+}
+
+impl embedded_hal::i2c::ErrorType for FakeI2cPort {
+    type Error = FakeI2cError;
+}
+
 impl FakeI2cPort {
     pub fn new() -> Self {
         FakeI2cPort {
@@ -54,10 +59,12 @@ impl FakeI2cPort {
         let pack = FakePacket::new_from_slice(bytes);
         self.available_packets.push_back(pack);
     }
-}
 
-impl I2c for FakeI2cPort {
-    fn read(&mut self, addr: u8, buffer: &mut [u8]) -> Result<(), Self::Error> {
+    fn handle_read(
+        &mut self,
+        addr: u8,
+        buffer: &mut [u8],
+    ) -> Result<(), FakeI2cError> {
         let next_pack =
             self.available_packets.pop_front().unwrap_or(FakePacket {
                 addr: addr,
@@ -90,7 +97,8 @@ impl I2c for FakeI2cPort {
                 );
             remainder_packet.buf[0] = ((remainder_len + 4) & 0xFF) as u8;
             remainder_packet.buf[1] =
-                ((((remainder_len + 4) & 0xFF00) as u16).shr(8) as u8) | 0x80; //set continuation flag
+                ((((remainder_len + 4) & 0xFF00) as u16).shr(8) as u8)
+                    | 0x80; //set continuation flag
             self.available_packets.push_front(remainder_packet);
         } else if src_len == dest_len {
             let read_len = src_len;
@@ -102,31 +110,34 @@ impl I2c for FakeI2cPort {
 
         Ok(())
     }
+
+    fn handle_write(
+        &mut self,
+        _addr: u8,
+        bytes: &[u8],
+    ) -> Result<(), FakeI2cError> {
+        let sent_pack = FakePacket::new_from_slice(bytes);
+        self.sent_packets.push_back(sent_pack);
+        Ok(())
+    }
 }
 
 impl I2c for FakeI2cPort {
     fn transaction(
         &mut self,
         address: u8,
-        operations: &mut [embedded_hal::i2c::Operation<'_>],
+        operations: &mut [Operation<'_>],
     ) -> Result<(), Self::Error> {
-        let sent_pack = FakePacket::new_from_slice(_bytes);
-        self.sent_packets.push_back(sent_pack);
-        Ok(())
-    }
-}
-
-impl WriteRead for FakeI2cPort {
-    type Error = ();
-
-    fn write_read(
-        &mut self,
-        address: u8,
-        send_buf: &[u8],
-        recv_buf: &mut [u8],
-    ) -> Result<(), Self::Error> {
-        self.write(address, send_buf)?;
-        self.read(address, recv_buf)?;
+        for op in operations {
+            match op {
+                Operation::Read(buf) => {
+                    self.handle_read(address, buf)?;
+                }
+                Operation::Write(buf) => {
+                    self.handle_write(address, buf)?;
+                }
+            }
+        }
         Ok(())
     }
 }
