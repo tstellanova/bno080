@@ -3,21 +3,24 @@ mod i2c_common;
 pub mod spi;
 
 #[cfg(feature = "async")]
-pub mod i2c_async;
+use {
+    embedded_hal_async::delay::DelayNs,
+    core::future::Future
+};
 
-#[cfg(feature = "async")]
-use embedded_hal_async::delay::DelayNs as DelayNsAsync;
+#[cfg(not(feature = "async"))]
+use embedded_hal::delay::DelayNs;
 
 #[cfg(test)]
 pub mod mock_i2c_port;
 
 use core::ops::Shl;
 
-use embedded_hal::delay::DelayNs;
 #[cfg(feature = "rttdebug")]
 use panic_rtt_core::rprintln;
 
 /// A method of communicating with the sensor
+#[maybe_async::maybe_async(AFIT)]
 pub trait SensorInterface {
     /// Interface error type
     type SensorError;
@@ -26,17 +29,17 @@ pub trait SensorInterface {
     fn setup(
         &mut self,
         delay_source: &mut impl DelayNs,
-    ) -> Result<(), Self::SensorError>;
+    ) -> impl Future<Output = Result<(), Self::SensorError>>;
 
     /// Write the whole packet provided
-    fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError>;
+    fn write_packet(&mut self, packet: &[u8]) -> impl Future<Output = Result<(), Self::SensorError>>;
 
     /// Read the next packet from the sensor
     /// Returns the size of the packet read (up to the size of the slice provided)
     fn read_packet(
         &mut self,
         recv_buf: &mut [u8],
-    ) -> Result<usize, Self::SensorError>;
+    ) -> impl Future<Output = Result<usize, Self::SensorError>>;
 
     /// Wait for sensor to indicate it has data available before reading
     /// - `max_ms` maximum number of milliseconds to wait for data
@@ -45,67 +48,20 @@ pub trait SensorInterface {
         recv_buf: &mut [u8],
         delay_source: &mut impl DelayNs,
         max_ms: u8,
-    ) -> Result<usize, Self::SensorError>;
+    ) -> impl Future<Output = Result<usize, Self::SensorError>>;
 
     /// Send a packet and receive the response immediately
     fn send_and_receive_packet(
         &mut self,
         send_buf: &[u8],
         recv_buf: &mut [u8],
-    ) -> Result<usize, Self::SensorError>;
-
-    /// Does this interface require a soft reset after init?
-    fn requires_soft_reset(&self) -> bool;
-}
-
-#[cfg(feature = "async")]
-#[allow(async_fn_in_trait)]
-pub trait SensorInterfaceAsync {
-    /// Interface error type
-    type SensorError;
-
-    /// give the sensor interface a chance to set up
-    async fn setup(
-        &mut self,
-        delay_source: &mut impl DelayNsAsync,
-    ) -> Result<(), Self::SensorError>;
-
-    /// Write the whole packet provided
-    async fn write_packet(
-        &mut self,
-        packet: &[u8],
-    ) -> Result<(), Self::SensorError>;
-
-    /// Read the next packet from the sensor
-    /// Returns the size of the packet read (up to the size of the slice provided)
-    async fn read_packet(
-        &mut self,
-        recv_buf: &mut [u8],
-    ) -> Result<usize, Self::SensorError>;
-
-    /// Wait for sensor to indicate it has data available before reading
-    /// - `max_ms` maximum number of milliseconds to wait for data
-    async fn read_with_timeout(
-        &mut self,
-        recv_buf: &mut [u8],
-        delay_source: &mut impl DelayNsAsync,
-        max_ms: u8,
-    ) -> Result<usize, Self::SensorError>;
-
-    /// Send a packet and receive the response immediately
-    async fn send_and_receive_packet(
-        &mut self,
-        send_buf: &[u8],
-        recv_buf: &mut [u8],
-    ) -> Result<usize, Self::SensorError>;
+    ) -> impl Future<Output = Result<usize, Self::SensorError>>;
 
     /// Does this interface require a soft reset after init?
     fn requires_soft_reset(&self) -> bool;
 }
 
 pub use self::i2c::I2cInterface;
-#[cfg(feature = "async")]
-pub use self::i2c_async::I2cInterfaceAsync;
 pub use self::spi::SpiInterface;
 
 pub(crate) const PACKET_HEADER_LENGTH: usize = 4;

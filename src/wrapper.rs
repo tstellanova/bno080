@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2020 Todd Stellanova
+Copyright (c) 2026 Aleksandar Bukva
 LICENSE: BSD3 (see LICENSE file)
 */
 
@@ -7,7 +7,12 @@ use crate::interface::{SensorInterface, PACKET_HEADER_LENGTH};
 
 use core::ops::Shr;
 
+#[cfg(feature = "async")]
+use embedded_hal_async::delay::DelayNs;
+
+#[cfg(not(feature = "async"))]
 use embedded_hal::delay::DelayNs;
+
 #[cfg(feature = "rttdebug")]
 use panic_rtt_core::rprintln;
 
@@ -98,54 +103,56 @@ impl<SI> BNO080<SI> {
     }
 }
 
+#[maybe_async::maybe_async(AFIT)]
 impl<SI, SE> BNO080<SI>
 where
     SI: SensorInterface<SensorError = SE>,
     SE: core::fmt::Debug,
 {
     /// Consume all available messages on the port without processing them
-    pub fn eat_all_messages(&mut self, delay: &mut impl DelayNs) {
+    pub async fn eat_all_messages(&mut self, delay: &mut impl DelayNs) {
         #[cfg(feature = "rttdebug")]
         rprintln!("eat_n");
         loop {
-            let msg_count = self.eat_one_message(delay);
+            let msg_count = self.eat_one_message(delay).await;
             if msg_count == 0 {
                 break;
             }
             //give some time to other parts of the system
-            delay.delay_ms(1);
+            delay.delay_ms(1).await;
         }
     }
 
     /// Handle any messages with a timeout
-    pub fn handle_all_messages(
+    pub async fn handle_all_messages(
         &mut self,
         delay: &mut impl DelayNs,
         timeout_ms: u8,
     ) -> u32 {
         let mut total_handled: u32 = 0;
         loop {
-            let handled_count = self.handle_one_message(delay, timeout_ms);
+            let handled_count =
+                self.handle_one_message(delay, timeout_ms).await;
             if handled_count == 0 {
                 break;
             } else {
                 total_handled += handled_count;
                 //give some time to other parts of the system
-                delay.delay_ms(1);
+                delay.delay_ms(1).await;
             }
         }
         total_handled
     }
 
     /// return the number of messages handled
-    pub fn handle_one_message(
+    pub async fn handle_one_message(
         &mut self,
         delay: &mut impl DelayNs,
         max_ms: u8,
     ) -> u32 {
         let mut msg_count = 0;
 
-        let res = self.receive_packet_with_timeout(delay, max_ms);
+        let res = self.receive_packet_with_timeout(delay, max_ms).await;
         if res.is_ok() {
             let received_len = res.unwrap_or(0);
             if received_len > 0 {
@@ -163,8 +170,8 @@ where
     /// Receive and ignore one message,
     /// returning the size of the packet received or zero
     /// if there was no packet to read.
-    pub fn eat_one_message(&mut self, delay: &mut impl DelayNs) -> usize {
-        let res = self.receive_packet_with_timeout(delay, 150);
+    pub async fn eat_one_message(&mut self, delay: &mut impl DelayNs) -> usize {
+        let res = self.receive_packet_with_timeout(delay, 150).await;
         if let Ok(received_len) = res {
             #[cfg(feature = "rttdebug")]
             rprintln!("e1 {}", received_len);
@@ -450,7 +457,7 @@ where
 
     /// The BNO080 starts up with all sensors disabled,
     /// waiting for the application to configure it.
-    pub fn init(
+    pub async fn init(
         &mut self,
         delay_source: &mut impl DelayNs,
     ) -> Result<(), WrapperError<SE>> {
@@ -459,27 +466,28 @@ where
 
         //Section 5.1.1.1 : On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
-        delay_source.delay_ms(1);
+        delay_source.delay_ms(1).await;
         self.sensor_interface
             .setup(delay_source)
+            .await
             .map_err(WrapperError::CommError)?;
 
         if self.sensor_interface.requires_soft_reset() {
-            delay_source.delay_ms(1);
-            self.soft_reset()?;
-            delay_source.delay_ms(150);
-            self.eat_all_messages(delay_source);
-            delay_source.delay_ms(50);
-            self.eat_all_messages(delay_source);
+            delay_source.delay_ms(1).await;
+            self.soft_reset().await?;
+            delay_source.delay_ms(150).await;
+            self.eat_all_messages(delay_source).await;
+            delay_source.delay_ms(50).await;
+            self.eat_all_messages(delay_source).await;
         } else {
             // we only expect two messages after reset:
             // eat the advertisement response
-            self.eat_one_message(delay_source);
+            self.eat_one_message(delay_source).await;
             // eat the unsolicited initialization response
-            self.eat_one_message(delay_source);
+            self.eat_one_message(delay_source).await;
         }
 
-        self.verify_product_id(delay_source)?;
+        self.verify_product_id(delay_source).await?;
         //self.eat_all_messages(delay_source);
 
         Ok(())
@@ -488,7 +496,7 @@ where
     /// Tell the sensor to start reporting the fused rotation vector
     /// on a regular cadence. Note that the maximum valid update rate
     /// is 1 kHz, based on the max update rate of the sensor's gyros.
-    pub fn enable_rotation_vector(
+    pub async fn enable_rotation_vector(
         &mut self,
         millis_between_reports: u16,
     ) -> Result<(), WrapperError<SE>> {
@@ -496,26 +504,29 @@ where
             SENSOR_REPORTID_ROTATION_VECTOR,
             millis_between_reports,
         )
+        .await
     }
 
     /// Enables reporting of linear acceleration vector.
-    pub fn enable_linear_accel(
+    pub async fn enable_linear_accel(
         &mut self,
         millis_between_reports: u16,
     ) -> Result<(), WrapperError<SE>> {
         self.enable_report(SENSOR_REPORTID_LINEAR_ACCEL, millis_between_reports)
+            .await
     }
 
     /// Enables reporting of gyroscope data.
-    pub fn enable_gyro(
+    pub async fn enable_gyro(
         &mut self,
         millis_between_reports: u16,
     ) -> Result<(), WrapperError<SE>> {
         self.enable_report(SENSOR_REPORTID_GYRO, millis_between_reports)
+            .await
     }
 
     /// Enable a particular report
-    fn enable_report(
+    async fn enable_report(
         &mut self,
         report_id: u8,
         millis_between_reports: u16,
@@ -546,7 +557,7 @@ where
         ];
 
         //we simply blast out this configuration command and assume it'll succeed
-        self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
+        self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body).await?;
         // any error or success in configuration will arrive some time later
 
         Ok(())
@@ -574,7 +585,7 @@ where
     }
 
     /// Send packet from our packet send buf
-    fn send_packet(
+    async fn send_packet(
         &mut self,
         channel: u8,
         body_data: &[u8],
@@ -582,12 +593,13 @@ where
         let packet_length = self.prep_send_packet(channel, body_data);
         self.sensor_interface
             .write_packet(&self.packet_send_buf[..packet_length])
+            .await
             .map_err(WrapperError::CommError)?;
         Ok(packet_length)
     }
 
     /// Read one packet into the receive buffer
-    pub(crate) fn receive_packet_with_timeout(
+    pub(crate) async fn receive_packet_with_timeout(
         &mut self,
         delay: &mut impl DelayNs,
         max_ms: u8,
@@ -600,6 +612,7 @@ where
         let packet_len = self
             .sensor_interface
             .read_with_timeout(&mut self.packet_recv_buf, delay, max_ms)
+            .await
             .map_err(WrapperError::CommError)?;
 
         self.last_packet_len_received = packet_len;
@@ -610,7 +623,7 @@ where
     }
 
     /// Verify that the sensor returns an expected chip ID
-    fn verify_product_id(
+    async fn verify_product_id(
         &mut self,
         delay: &mut impl DelayNs,
     ) -> Result<(), WrapperError<SE>> {
@@ -623,12 +636,12 @@ where
 
         // for some reason, reading PID right sending request does not work with i2c
         if self.sensor_interface.requires_soft_reset() {
-            self.send_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
+            self.send_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())
+                .await?;
         } else {
-            let response_size = self.send_and_receive_packet(
-                CHANNEL_HUB_CONTROL,
-                cmd_body.as_ref(),
-            )?;
+            let response_size = self
+                .send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())
+                .await?;
             if response_size > 0 {
                 self.handle_received_packet(response_size);
             }
@@ -638,7 +651,7 @@ where
         while !self.prod_id_verified {
             #[cfg(feature = "rttdebug")]
             rprintln!("read PID");
-            let msg_count = self.handle_one_message(delay, 150u8);
+            let msg_count = self.handle_one_message(delay, 150u8).await;
             if msg_count < 1 {
                 break;
             }
@@ -676,13 +689,14 @@ where
     /// Tell the sensor to reset.
     /// Normally applications should not need to call this directly,
     /// as it is called during `init`.
-    pub fn soft_reset(&mut self) -> Result<(), WrapperError<SE>> {
+    pub async fn soft_reset(&mut self) -> Result<(), WrapperError<SE>> {
         // #[cfg(feature = "rttdebug")]
         // rprintln!("soft_reset");
         let data: [u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET];
         // send command packet and ignore received packets
-        let received_len =
-            self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
+        let received_len = self
+            .send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())
+            .await?;
         if received_len > 0 {
             self.handle_received_packet(received_len);
         }
@@ -691,7 +705,7 @@ where
     }
 
     /// Send a packet and receive the response
-    fn send_and_receive_packet(
+    async fn send_and_receive_packet(
         &mut self,
         channel: u8,
         body_data: &[u8],
@@ -706,6 +720,7 @@ where
                 self.packet_send_buf[..send_packet_length].as_ref(),
                 &mut self.packet_recv_buf,
             )
+            .await
             .map_err(WrapperError::CommError)?;
 
         #[cfg(feature = "rttdebug")]

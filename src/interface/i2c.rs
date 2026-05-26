@@ -2,7 +2,17 @@ use super::i2c_common::I2cCommon;
 use super::{SensorInterface, PACKET_HEADER_LENGTH};
 use crate::Error;
 
-use embedded_hal::delay::DelayNs;
+#[cfg(feature = "async")]
+use {
+    embedded_hal_async::delay::DelayNs,
+    embedded_hal_async::i2c::I2c,
+};
+
+#[cfg(not(feature = "async"))]
+use {
+    embedded_hal::delay::DelayNs,
+    embedded_hal::i2c::I2c,
+};
 
 #[cfg(feature = "rttdebug")]
 use panic_rtt_core::rprintln;
@@ -15,9 +25,10 @@ pub struct I2cInterface<I2C> {
     common: I2cCommon,
 }
 
+#[maybe_async::maybe_async]
 impl<I2C, CommE> I2cInterface<I2C>
 where
-    I2C: embedded_hal::i2c::I2c<Error = CommE>,
+    I2C: I2c<Error = CommE>,
 {
     pub fn default(i2c: I2C) -> Self {
         Self::new(i2c, DEFAULT_ADDRESS)
@@ -38,7 +49,7 @@ where
         self.i2c_port
     }
 
-    fn read_packet_header(&mut self) -> Result<(), Error<CommE, ()>> {
+    async fn read_packet_header(&mut self) -> Result<(), Error<CommE, ()>> {
         self.common.zero_recv_packet_header();
         let address = self.common.address();
         self.i2c_port
@@ -46,13 +57,14 @@ where
                 address,
                 &mut self.common.seg_recv_buf_mut()[..PACKET_HEADER_LENGTH],
             )
+            .await
             .map_err(Error::Comm)?;
 
         Ok(())
     }
 
     /// Read the remainder of the packet after the packet header, if any
-    fn read_sized_packet(
+    async fn read_sized_packet(
         &mut self,
         total_packet_len: usize,
         packet_recv_buf: &mut [u8],
@@ -67,6 +79,7 @@ where
             let address = self.common.address();
             self.i2c_port
                 .read(address, &mut packet_recv_buf[..read_len])
+                .await
                 .map_err(Error::Comm)?;
             return Ok(sized_read.finish_direct_read(read_len));
         }
@@ -83,6 +96,7 @@ where
                     address,
                     &mut self.common.seg_recv_buf_mut()[..segment_read_len],
                 )
+                .await
                 .map_err(Error::Comm)?;
 
             let promised_packet_len = self.common.packet_len_from_header();
@@ -103,9 +117,10 @@ where
     }
 }
 
+#[maybe_async::maybe_async(AFIT)]
 impl<I2C, CommE> SensorInterface for I2cInterface<I2C>
 where
-    I2C: embedded_hal::i2c::I2c<Error = CommE>,
+    I2C: I2c<Error = CommE>,
 {
     type SensorError = Error<CommE, ()>;
 
@@ -113,25 +128,31 @@ where
         true
     }
 
-    fn setup(
+    async fn setup(
         &mut self,
         delay_source: &mut impl DelayNs,
     ) -> Result<(), Self::SensorError> {
         // #[cfg(feature = "rttdebug")]
         // rprintln!("i2c setup");
-        delay_source.delay_ms(5);
+        delay_source.delay_ms(5).await;
         Ok(())
     }
 
-    fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
+    async fn write_packet(
+        &mut self,
+        packet: &[u8],
+    ) -> Result<(), Self::SensorError> {
         #[cfg(feature = "rttdebug")]
         rprintln!("w {:x} {}", self.common.address(), packet.len());
         let address = self.common.address();
-        self.i2c_port.write(address, packet).map_err(Error::Comm)?;
+        self.i2c_port
+            .write(address, packet)
+            .await
+            .map_err(Error::Comm)?;
         Ok(())
     }
 
-    fn read_with_timeout(
+    async fn read_with_timeout(
         &mut self,
         recv_buf: &mut [u8],
         delay_source: &mut impl DelayNs,
@@ -139,11 +160,11 @@ where
     ) -> Result<usize, Self::SensorError> {
         let mut total_delay: u8 = 0;
         while total_delay < max_ms {
-            match self.read_packet(recv_buf) {
+            match self.read_packet(recv_buf).await {
                 Ok(read_size) => {
                     if 0 == read_size {
                         // no data available yet...wait a while longer
-                        delay_source.delay_ms(1);
+                        delay_source.delay_ms(1).await;
                         total_delay += 1;
                     } else {
                         return Ok(read_size);
@@ -157,14 +178,14 @@ where
     }
 
     /// Read one packet into the receive buffer
-    fn read_packet(
+    async fn read_packet(
         &mut self,
         recv_buf: &mut [u8],
     ) -> Result<usize, Self::SensorError> {
         // #[cfg(feature = "rttdebug")]
         // rprintln!("rpkt");
 
-        self.read_packet_header()?;
+        self.read_packet_header().await?;
         let packet_len = self.common.packet_len_from_header();
 
         // if packet_len == 0 {
@@ -173,7 +194,7 @@ where
         // }
 
         let received_len = if packet_len > PACKET_HEADER_LENGTH {
-            self.read_sized_packet(packet_len, recv_buf)?
+            self.read_sized_packet(packet_len, recv_buf).await?
         } else {
             packet_len
         };
@@ -183,7 +204,7 @@ where
         Ok(received_len)
     }
 
-    fn send_and_receive_packet(
+    async fn send_and_receive_packet(
         &mut self,
         send_buf: &[u8],
         recv_buf: &mut [u8],
@@ -194,6 +215,7 @@ where
         let address = self.common.address();
         self.i2c_port
             .write(address, send_buf)
+            .await
             .map_err(Error::Comm)?;
 
         self.common.zero_recv_packet_header();
@@ -205,12 +227,13 @@ where
                 address,
                 &mut self.common.seg_recv_buf_mut()[..PACKET_HEADER_LENGTH],
             )
+            .await
             .map_err(Error::Comm)?;
 
         let packet_len = self.common.packet_len_from_header();
 
         let received_len = if packet_len > PACKET_HEADER_LENGTH {
-            self.read_sized_packet(packet_len, recv_buf)?
+            self.read_sized_packet(packet_len, recv_buf).await?
         } else {
             packet_len
         };

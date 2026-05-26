@@ -1,5 +1,14 @@
-use embedded_hal;
-use embedded_hal::delay::DelayNs;
+#[cfg(feature = "async")]
+use {
+    embedded_hal_async::delay::DelayNs,
+    embedded_hal_async::spi::SpiDevice,
+};
+
+#[cfg(not(feature = "async"))]
+use {
+    embedded_hal::delay::DelayNs,
+    embedded_hal::spi::SpiDevice,
+};
 
 use super::SensorInterface;
 use crate::interface::{SensorCommon, PACKET_HEADER_LENGTH};
@@ -35,9 +44,10 @@ pub struct SpiInterface<SPI, CSN, IN, RSTN> {
     received_packet_count: usize,
 }
 
+#[maybe_async::maybe_async(AFIT)]
 impl<SPI, CSN, IN, RSTN, CommE, PinE> SpiInterface<SPI, CSN, IN, RSTN>
 where
-    SPI: embedded_hal::spi::SpiDevice<u8, Error = CommE>,
+    SPI: SpiDevice<u8, Error = CommE>,
     CSN: OutputPin<Error = PinE>,
     IN: InputPin<Error = PinE>,
     RSTN: OutputPin<Error = PinE>,
@@ -65,7 +75,7 @@ where
     /// After reset this can take around 120 ms
     /// Return true if the sensor is awake, false if it doesn't wake up
     /// `max_ms` maximum milliseconds to await for HINTN change
-    fn wait_for_sensor_awake(
+    async fn wait_for_sensor_awake(
         &mut self,
         delay_source: &mut impl DelayNs,
         max_ms: u8,
@@ -74,7 +84,7 @@ where
             if self.hintn_signaled() {
                 return true;
             }
-            delay_source.delay_ms(1);
+            delay_source.delay_ms(1).await;
         }
 
         false
@@ -95,7 +105,7 @@ where
 
     /// read the body ("cargo" or "payload") of a packet,
     /// return the total packet length read
-    fn read_packet_cargo(&mut self, recv_buf: &mut [u8]) -> usize {
+    async fn read_packet_cargo(&mut self, recv_buf: &mut [u8]) -> usize {
         let mut packet_len = SensorCommon::parse_packet_header(
             &recv_buf[..PACKET_HEADER_LENGTH],
         );
@@ -108,7 +118,8 @@ where
             }
             let rc = self
                 .spi
-                .read(&mut recv_buf[PACKET_HEADER_LENGTH..packet_len]);
+                .read(&mut recv_buf[PACKET_HEADER_LENGTH..packet_len])
+                .await;
             if rc.is_err() {
                 packet_len = 0;
             }
@@ -120,10 +131,11 @@ where
     }
 }
 
+#[maybe_async::maybe_async(AFIT)]
 impl<SPI, CSN, IN, RS, CommE, PinE> SensorInterface
     for SpiInterface<SPI, CSN, IN, RS>
 where
-    SPI: embedded_hal::spi::SpiDevice<u8, Error = CommE>,
+    SPI: SpiDevice<u8, Error = CommE>,
     CSN: OutputPin<Error = PinE>,
     IN: InputPin<Error = PinE>,
     RS: OutputPin<Error = PinE>,
@@ -136,7 +148,7 @@ where
         false
     }
 
-    fn setup(
+    async fn setup(
         &mut self,
         delay_source: &mut impl DelayNs,
     ) -> Result<(), Self::SensorError> {
@@ -152,11 +164,11 @@ where
         // reset cycle
 
         self.reset.set_low().map_err(Error::Pin)?;
-        delay_source.delay_ms(2);
+        delay_source.delay_ms(2).await;
         self.reset.set_high().map_err(Error::Pin)?;
 
         // wait for sensor to set hintn pin after reset
-        let ready = self.wait_for_sensor_awake(delay_source, 200u8);
+        let ready = self.wait_for_sensor_awake(delay_source, 200u8).await;
         if !ready {
             #[cfg(feature = "rttdebug")]
             rprintln!("sensor not ready");
@@ -166,14 +178,16 @@ where
         Ok(())
     }
 
-    fn send_and_receive_packet(
+    async fn send_and_receive_packet(
         &mut self,
         send_buf: &[u8],
         recv_buf: &mut [u8],
     ) -> Result<usize, Self::SensorError> {
         // select the sensor
         self.csn.set_low().map_err(Error::Pin)?;
-        let rc = self.spi.write(send_buf).map_err(Error::Comm);
+        let rc = self.spi.write(send_buf)
+            .await
+            .map_err(Error::Comm);
         self.csn.set_high().map_err(Error::Pin)?;
         if let Err(e) = rc {
             //release the sensor
@@ -199,6 +213,7 @@ where
         let rc = self
             .spi
             .read(&mut recv_buf[..PACKET_HEADER_LENGTH])
+            .await
             .map_err(Error::Comm);
         if rc.is_err() {
             //release the sensor
@@ -208,7 +223,7 @@ where
             return Err(rc.unwrap_err());
         }
 
-        let packet_len = self.read_packet_cargo(recv_buf);
+        let packet_len = self.read_packet_cargo(recv_buf).await;
 
         //release the sensor
         self.csn.set_high().map_err(Error::Pin)?;
@@ -220,9 +235,11 @@ where
         Ok(packet_len)
     }
 
-    fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
+    async fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
         self.csn.set_low().map_err(Error::Pin)?;
-        let rc = self.spi.write(packet).map_err(Error::Comm);
+        let rc = self.spi.write(packet)
+            .await
+            .map_err(Error::Comm);
         self.csn.set_high().map_err(Error::Pin)?;
 
         if let Err(e) = rc {
@@ -233,7 +250,7 @@ where
     }
 
     /// Read a complete packet from the sensor
-    fn read_packet(
+    async fn read_packet(
         &mut self,
         recv_buf: &mut [u8],
     ) -> Result<usize, Self::SensorError> {
@@ -251,6 +268,7 @@ where
         let rc = self
             .spi
             .read(&mut recv_buf[..PACKET_HEADER_LENGTH])
+            .await
             .map_err(Error::Comm);
 
         if rc.is_err() {
@@ -259,7 +277,7 @@ where
             return Err(rc.unwrap_err());
         }
 
-        let packet_len = self.read_packet_cargo(recv_buf);
+        let packet_len = self.read_packet_cargo(recv_buf).await;
 
         //release the sensor
         self.csn.set_high().map_err(Error::Pin)?;
@@ -271,14 +289,14 @@ where
         Ok(packet_len)
     }
 
-    fn read_with_timeout(
+    async fn read_with_timeout(
         &mut self,
         recv_buf: &mut [u8],
         delay_source: &mut impl DelayNs,
         max_ms: u8,
     ) -> Result<usize, Self::SensorError> {
-        if self.wait_for_sensor_awake(delay_source, max_ms) {
-            return self.read_packet(recv_buf);
+        if self.wait_for_sensor_awake(delay_source, max_ms).await {
+            return self.read_packet(recv_buf).await;
         }
         Ok(0)
     }
